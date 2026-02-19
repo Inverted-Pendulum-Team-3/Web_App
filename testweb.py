@@ -56,7 +56,7 @@ def start_program(name):
     try:
         PROGRAM_PROCS[name] = subprocess.Popen(
             ["python3", script],
-            preexec_fn=os.setsid,
+            preexec_fn=os.setsid
         )
         log_to_file("SYSTEM", f"Program '{name}' ({script}) started")
         return True
@@ -79,6 +79,7 @@ def stop_program(name):
         PROGRAM_PROCS[name] = None
 
 
+# Legacy helpers
 def is_imu_running():
     return is_program_running("imu")
 
@@ -104,16 +105,17 @@ def stop_motor_test():
 
 
 # =======================
-# SENSOR LINE PARSER
+# PARSE SENSOR LINE
 # =======================
 def parse_sensor_line(line):
     """
-    Parse lines like:
+    Parse a line like:
 
-    18:22:42, IMU1, Forward/backwards Tilt in rad/s, 0.0000, ...,
-    IMU1 Linear Velocity, 0.0000, IMU1's X-velocity, 0.0000, ...
-    Robot Yaw Rate, 0.0000, Pendulum Angular Velocity, 0.0000, ...
-    EncoderL, 0.0000, Direction, stopped, EncoderR, 0.0000, Direction, stopped | Ultrasonic Right: 99.4 cm   Ultrasonic Left: --- cm
+    18:22:42, IMU1, Forward/backwards Tilt in rad/s, 0.0000, Side-to-Side tilt in rad/s, 0.0000, ...
+    ..., Robot Yaw Rate, 0.0000, Pendulum Angular Velocity, 0.0000, Pendulum Angle, 0.0000,
+    Pendulum Angle (deg), 0.00, EncoderL, 0.0000, Direction, stopped, EncoderR, 0.0000, Direction, stopped   |   Ultrasonic Right: 99.4 cm   Ultrasonic Left: 10 cm
+
+    and return a structured dict with all fields, numeric ones rounded to 1 decimal.
     """
     result = {
         "IMU1": {
@@ -138,14 +140,6 @@ def parse_sensor_line(line):
             "X velocity": "",
             "Y velocity": "",
         },
-        "Extra": {
-            "Robot Yaw Rate": "",
-            "Pendulum Angular Velocity": "",
-            "Pendulum Angle": "",
-            "Pendulum Angle Deg": "",
-            "Ultrasonic Right": "",
-            "Ultrasonic Left": "",
-        },
         "EncoderL": {
             "Speed": "",
             "Direction": "",
@@ -154,105 +148,122 @@ def parse_sensor_line(line):
             "Speed": "",
             "Direction": "",
         },
+        "Robot": {
+            "Yaw Rate": "",
+        },
+        "Pendulum": {
+            "Angular Velocity": "",
+            "Angle": "",
+            "AngleDeg": "",
+        },
+        "Ultrasonic": {
+            "Right": "",
+            "Left": "",
+        },
     }
 
-    def fmt(val):
+    def num1(x):
         try:
-            return f"{float(val):.1f}"
+            return f"{float(x):.1f}"
         except Exception:
-            return val
+            return x
 
     try:
-        main_part = line
-        ultrasonic_part = ""
-        if "|" in line:
-            main_part, ultrasonic_part = [s.strip() for s in line.split("|", 1)]
+        if "   |   " in line:
+            main_part, ultra_part = line.split("   |   ", 1)
+        else:
+            main_part, ultra_part = line, ""
 
         tokens = [tok.strip() for tok in main_part.split(",")]
         idx = 0
 
+        # Time
         if idx < len(tokens) and ":" in tokens[idx]:
             result["IMU1"]["Time"] = tokens[idx]
             idx += 1
 
+        # IMU1
         if idx < len(tokens) and tokens[idx] == "IMU1":
             idx += 1
-            imu1_map = {
-                "Forward/backwards Tilt in rad/s": "Forward/backwards Tilt",
-                "Side-to-Side tilt in rad/s": "Side-to-Side Tilt",
-                "Yaw in rad/s": "Yaw",
-                "Pitch Rate in rad/s": "Pitch Rate",
-                "Roll Rate in rad/s": "Roll Rate",
-                "Rotational Velocity in rad/s": "Rotational Velocity",
-            }
-            while idx + 1 < len(tokens) and tokens[idx] in imu1_map:
-                label = tokens[idx]
-                value = tokens[idx + 1]
-                result["IMU1"][imu1_map[label]] = fmt(value)
-                idx += 2
+            imu1_map = [
+                ("Forward/backwards Tilt in rad/s", "Forward/backwards Tilt"),
+                ("Side-to-Side tilt in rad/s", "Side-to-Side Tilt"),
+                ("Yaw in rad/s", "Yaw"),
+                ("Pitch Rate in rad/s", "Pitch Rate"),
+                ("Roll Rate in rad/s", "Roll Rate"),
+                ("Rotational Velocity in rad/s", "Rotational Velocity"),
+            ]
+            for label, key in imu1_map:
+                if idx + 1 < len(tokens) and tokens[idx] == label:
+                    result["IMU1"][key] = num1(tokens[idx + 1])
+                    idx += 2
 
+        # IMU2
         if idx < len(tokens) and tokens[idx] == "IMU2":
             idx += 1
-            imu2_map = {
-                "Tilt in rad/s": "Forward/backwards Tilt",
-                "Side-to-Side tilt in rad/s": "Side-to-Side Tilt",
-                "Yaw in rad/s": "Yaw",
-                "Pitch Rate in rad/s": "Pitch Rate",
-                "Roll Rate in rad/s": "Roll Rate",
-                "Rotational Velocity in rad/s": "Rotational Velocity",
-            }
-            while idx + 1 < len(tokens) and tokens[idx] in imu2_map:
-                label = tokens[idx]
-                value = tokens[idx + 1]
-                result["IMU2"][imu2_map[label]] = fmt(value)
-                idx += 2
+            imu2_map = [
+                ("Tilt in rad/s", "Forward/backwards Tilt"),
+                ("Side-to-Side tilt in rad/s", "Side-to-Side Tilt"),
+                ("Yaw in rad/s", "Yaw"),
+                ("Pitch Rate in rad/s", "Pitch Rate"),
+                ("Roll Rate in rad/s", "Roll Rate"),
+                ("Rotational Velocity in rad/s", "Rotational Velocity"),
+            ]
+            for label, key in imu2_map:
+                if idx + 1 < len(tokens) and tokens[idx] == label:
+                    result["IMU2"][key] = num1(tokens[idx + 1])
+                    idx += 2
 
+        # IMU1 Linear Velocity
         if idx < len(tokens) and tokens[idx] == "IMU1 Linear Velocity":
             idx += 1
             if idx < len(tokens):
-                result["IMU1Linear"]["Linear Velocity"] = fmt(tokens[idx])
+                result["IMU1Linear"]["Linear Velocity"] = num1(tokens[idx])
                 idx += 1
 
         if idx < len(tokens) and tokens[idx] == "IMU1's X-velocity":
             idx += 1
             if idx < len(tokens):
-                result["IMU1Linear"]["X velocity"] = fmt(tokens[idx])
+                result["IMU1Linear"]["X velocity"] = num1(tokens[idx])
                 idx += 1
 
         if idx < len(tokens) and tokens[idx] == "IMU1's Y-velocity":
             idx += 1
             if idx < len(tokens):
-                result["IMU1Linear"]["Y velocity"] = fmt(tokens[idx])
+                result["IMU1Linear"]["Y velocity"] = num1(tokens[idx])
                 idx += 1
 
+        # Robot Yaw Rate
         if idx < len(tokens) and tokens[idx] == "Robot Yaw Rate":
             idx += 1
             if idx < len(tokens):
-                result["Extra"]["Robot Yaw Rate"] = fmt(tokens[idx])
+                result["Robot"]["Yaw Rate"] = num1(tokens[idx])
                 idx += 1
 
+        # Pendulum values
         if idx < len(tokens) and tokens[idx] == "Pendulum Angular Velocity":
             idx += 1
             if idx < len(tokens):
-                result["Extra"]["Pendulum Angular Velocity"] = fmt(tokens[idx])
+                result["Pendulum"]["Angular Velocity"] = num1(tokens[idx])
                 idx += 1
 
         if idx < len(tokens) and tokens[idx] == "Pendulum Angle":
             idx += 1
             if idx < len(tokens):
-                result["Extra"]["Pendulum Angle"] = fmt(tokens[idx])
+                result["Pendulum"]["Angle"] = num1(tokens[idx])
                 idx += 1
 
         if idx < len(tokens) and tokens[idx] == "Pendulum Angle (deg)":
             idx += 1
             if idx < len(tokens):
-                result["Extra"]["Pendulum Angle Deg"] = fmt(tokens[idx])
+                result["Pendulum"]["AngleDeg"] = num1(tokens[idx])
                 idx += 1
 
+        # EncoderL
         if idx < len(tokens) and tokens[idx] == "EncoderL":
             idx += 1
             if idx < len(tokens):
-                result["EncoderL"]["Speed"] = fmt(tokens[idx])
+                result["EncoderL"]["Speed"] = num1(tokens[idx])
                 idx += 1
             if idx < len(tokens) and tokens[idx] == "Direction":
                 idx += 1
@@ -260,10 +271,11 @@ def parse_sensor_line(line):
                     result["EncoderL"]["Direction"] = tokens[idx]
                     idx += 1
 
+        # EncoderR
         if idx < len(tokens) and tokens[idx] == "EncoderR":
             idx += 1
             if idx < len(tokens):
-                result["EncoderR"]["Speed"] = fmt(tokens[idx])
+                result["EncoderR"]["Speed"] = num1(tokens[idx])
                 idx += 1
             if idx < len(tokens) and tokens[idx] == "Direction":
                 idx += 1
@@ -271,22 +283,26 @@ def parse_sensor_line(line):
                     result["EncoderR"]["Direction"] = tokens[idx]
                     idx += 1
 
-        if ultrasonic_part:
-            parts = ultrasonic_part.split("Ultrasonic")
-            for p in parts:
-                p = p.strip()
-                if p.startswith("Right:"):
-                    val = p.replace("Right:", "").replace("cm", "").strip()
-                    result["Extra"]["Ultrasonic Right"] = (
-                        (fmt(val) + " cm") if val != "---" else val + " cm"
-                    )
-                elif p.startswith("Left:"):
-                    val = p.replace("Left:", "").replace("cm", "").strip()
-                    result["Extra"]["Ultrasonic Left"] = (
-                        (fmt(val) + " cm") if val != "---" else val + " cm"
-                    )
-    except Exception:
-        pass
+        # Ultrasonic part
+        if ultra_part:
+            up = ultra_part
+            if "Ultrasonic Right:" in up:
+                try:
+                    seg = up.split("Ultrasonic Right:", 1)[1]
+                    val = seg.split("cm", 1)[0].strip()
+                    result["Ultrasonic"]["Right"] = num1(val)
+                except Exception:
+                    pass
+            if "Ultrasonic Left:" in up:
+                try:
+                    seg = up.split("Ultrasonic Left:", 1)[1]
+                    val = seg.split("cm", 1)[0].strip()
+                    result["Ultrasonic"]["Left"] = num1(val)
+                except Exception:
+                    pass
+
+    except Exception as e:
+        log_to_file("ERROR", f"parse_sensor_line error: {e}")
 
     return result
 
@@ -299,7 +315,7 @@ def sensor_feed():
     try:
         with open("sensor_data.txt", "r") as f:
             line = f.readline().strip()
-        return jsonify(parse_sensor_line(line))
+            return jsonify(parse_sensor_line(line))
     except Exception:
         return jsonify(parse_sensor_line(""))
 
@@ -387,172 +403,173 @@ def home():
     log_to_file("SYSTEM", "Web interface loaded")
     return """
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
+    <meta charset="utf-8">
     <title>Control Hub</title>
     <style>
         :root {
-            --bg: #050811;
-            --panel-bg: #0c1020;
-            --panel-border: #272b3b;
+            --panel: #101820;
             --accent: #29f0ff;
-            --accent-soft: #1cb6c7;
-            --text: #e1f6ff;
-            --muted: #96a4c0;
-            --danger: #ff5560;
-            --ok: #8dff8a;
+            --text: #d7f8ff;
             --warn: #ffdd57;
-            --console-bg: #070b16;
-            --console-border: #1c2233;
-            --grid-gap: 14px;
-        }
-
-        * {
-            box-sizing: border-box;
+            --ok: #8dff8a;
+            --bad: #ff5560;
+            --bg: #0b0f14;
+            --grid-gap: 10px;
         }
 
         body {
             margin: 0;
-            padding: 14px;
-            background: radial-gradient(circle at top, #141a33 0, #050811 55%);
+            padding: 0;
+            background: var(--bg);
             color: var(--text);
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            font-size: 14px;
+            font-family: system-ui, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
 
-        h1 {
-            font-size: 1.1rem;
-            margin: 0 0 10px 2px;
+        .top-bar {
+            background: #111922;
+            padding: 8px 12px;
+            box-shadow: 0 2px 10px #000a;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .top-row, .bottom-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .top-row-left, .top-row-right,
+        .bottom-row-left, .bottom-row-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .top-title {
+            font-weight: 600;
+            letter-spacing: 0.03em;
             color: var(--accent);
-            letter-spacing: 0.08em;
+            text-shadow: 0 0 8px #29f0ff55;
+        }
+
+        .top-btn {
+            background: #101820;
+            border-radius: 7px;
+            border: 1px solid #18303c;
+            padding: 4px 8px;
+            font-size: 12px;
+            color: var(--text);
+            cursor: pointer;
             text-transform: uppercase;
-            text-shadow: 0 0 8px rgba(41,240,255,0.45);
+            font-weight: 600;
         }
 
-        .hub-shell {
-            max-width: 1240px;
-            margin: 0 auto;
+        .top-btn:hover {
+            border-color: var(--accent);
+            background: #11262c;
         }
 
-        .hub-grid {
-            display: grid;
-            grid-template-columns: 1.15fr 1.6fr 1.25fr;
+        .top-btn.danger {
+            color: var(--bad);
+            border-color: #a8444e;
+        }
+
+        .top-btn.success {
+            color: var(--ok);
+            border-color: #229953;
+        }
+
+        .top-btn.neutral {
+            color: var(--warn);
+            border-color: #bfa23a;
+        }
+
+        .top-status {
+            font-size: 12px;
+            font-family: ui-monospace;
+        }
+
+        .top-status span strong.ON {
+            color: var(--ok);
+        }
+
+        .top-status span strong.OFF {
+            color: var(--bad);
+        }
+
+        .top-status span strong.CALIB {
+            color: var(--warn);
+        }
+
+        .main-layout {
+            flex: 1;
+            padding: 10px;
+            display: flex;
             gap: var(--grid-gap);
+            box-sizing: border-box;
         }
 
         .panel {
-            background: linear-gradient(145deg, #0b0f1f, #060817);
-            border-radius: 11px;
-            border: 1px solid rgba(112,145,190,0.25);
-            box-shadow:
-                0 14px 30px rgba(0,0,0,0.75),
-                0 0 0 1px rgba(10,18,40,0.9),
-                0 0 42px rgba(15,180,220,0.08);
-            padding: 10px 11px 11px;
-            position: relative;
-        }
-
-        .panel::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            border-radius: inherit;
-            background: radial-gradient(circle at top left, rgba(41,240,255,0.08), transparent 60%);
-            pointer-events: none;
-        }
-
-        .panel-inner {
-            position: relative;
-            z-index: 1;
-        }
-
-        .panel-title-row {
+            background: var(--panel);
+            border-radius: 9px;
+            padding: 11px;
+            box-shadow: 0 2px 12px #0008;
             display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            margin-bottom: 6px;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .col-left, .col-center, .col-right {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: var(--grid-gap);
         }
 
         .panel-title {
-            font-size: 0.88rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--accent-soft);
-        }
-
-        .panel-subtitle {
-            font-size: 0.7rem;
-            color: var(--muted);
-            text-transform: uppercase;
-            letter-spacing: 0.14em;
-        }
-
-        .left-column-stack {
-            display: grid;
-            gap: var(--grid-gap);
-            grid-template-rows: auto 1.05fr;
-        }
-
-        .joystick-section {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
+            font-size: 0.9rem;
+            margin-bottom: 6px;
+            color: var(--accent);
         }
 
         .joystick-wrapper {
             display: flex;
-            gap: 10px;
-        }
-
-        .joystick-area-shell {
-            flex: 0 0 auto;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
         }
 
         .joystick-area {
             position: relative;
-            width: 170px;
-            height: 170px;
+            width: 180px;
+            height: 180px;
             border-radius: 50%;
             margin-top: 4px;
-            background:
-                radial-gradient(circle at 24% 18%, #273454 0, #0b0f1f 40%, #050714 80%);
-            border: 1px solid rgba(85,120,174,0.9);
-            box-shadow:
-                inset 0 0 18px rgba(0,0,0,0.7),
-                0 0 18px rgba(16,187,232,0.18);
+            background: radial-gradient(circle at 30% 30%, #1e2b36, #05090e);
+            border: 2px solid #18303c;
+            box-shadow: 0 0 10px #000a;
             touch-action: none;
         }
 
-        .joystick-grid-h,
-        .joystick-grid-v {
+        .joystick-base {
             position: absolute;
             left: 50%;
             top: 50%;
-            width: 86%;
-            height: 86%;
+            width: 140px;
+            height: 140px;
+            margin-left: -70px;
+            margin-top: -70px;
             border-radius: 50%;
-            border: 1px dashed rgba(104,147,196,0.45);
-            transform: translate(-50%, -50%);
-        }
-
-        .joystick-grid-v {
-            width: 44%;
-            height: 102%;
-        }
-
-        .joystick-base-ring {
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            width: 120px;
-            height: 120px;
-            margin-left: -60px;
-            margin-top: -60px;
-            border-radius: 50%;
-            background: radial-gradient(circle at 30% 25%, #2df9ff33, transparent 60%);
-            box-shadow: inset 0 0 12px rgba(0,0,0,0.7);
+            border: 1px dashed #2a4f60;
         }
 
         .joystick-knob {
@@ -564,312 +581,31 @@ def home():
             margin-left: -30px;
             margin-top: -30px;
             border-radius: 50%;
-            background:
-                radial-gradient(circle at 25% 20%, #4cffff, #0f6ba0 56%, #03152d 92%);
-            box-shadow:
-                0 0 16px rgba(41,240,255,0.88),
-                0 0 32px rgba(11,150,210,0.8);
-            border: 1px solid rgba(200,255,255,0.7);
-        }
-
-        .joystick-lights {
-            position: absolute;
-            inset: 5px;
-            border-radius: 50%;
-            background:
-                radial-gradient(circle at 16% 18%, rgba(255,255,255,0.09), transparent 72%),
-                radial-gradient(circle at 80% 80%, rgba(6,207,255,0.2), transparent 72%);
-            mix-blend-mode: screen;
-            pointer-events: none;
-        }
-
-        .joy-readouts-block {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
+            background: radial-gradient(circle at 30% 30%, #3cf0ff, #0e4f5b);
+            box-shadow: 0 0 14px #29f0ffaa;
         }
 
         .joy-readouts {
             display: flex;
-            gap: 10px;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 12px;
-        }
-
-        .joy-chip {
-            border-radius: 8px;
-            padding: 3px 10px;
-            border: 1px solid rgba(87,140,196,0.65);
-            background: radial-gradient(circle at 0 0, #1d3344 0, #07101f 70%);
-            box-shadow:
-                0 0 12px rgba(0,0,0,0.8),
-                inset 0 0 6px rgba(0,0,0,0.7);
-            color: #d5f4ff;
-        }
-
-        .joy-chip-label {
-            color: #8ea0c0;
-            margin-right: 6px;
-        }
-
-        .joy-chip-value {
-            color: #aef8ff;
-            font-weight: 600;
-        }
-
-        .joy-trash {
-            font-size: 11px;
-            color: #7f8dad;
-            margin-top: 8px;
-        }
-
-        .joy-trash span {
-            opacity: 0.8;
-        }
-
-        .sensor-panel-layout {
-            display: grid;
-            grid-template-columns: 1.2fr 1.05fr;
-            gap: 10px;
-            margin-top: 3px;
-        }
-
-        .sensor-block {
-            border-radius: 9px;
-            border: 1px solid rgba(92,132,201,0.5);
-            padding: 6px 7px 7px;
-            background: radial-gradient(circle at top left, #192338, #080b14);
-            box-shadow: inset 0 0 10px rgba(0,0,0,0.9);
-        }
-
-        .sensor-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 4px;
-        }
-
-        .sensor-header-label {
-            font-size: 0.78rem;
-            text-transform: uppercase;
-            letter-spacing: 0.12em;
-            color: var(--muted);
-        }
-
-        .sensor-chip {
-            padding: 2px 9px;
-            border-radius: 999px;
-            border: 1px solid rgba(78,140,214,0.8);
-            background: linear-gradient(120deg, rgba(12,190,255,0.3), rgba(2,12,28,0.3));
-            font-size: 11px;
-            color: #e6fbff;
-        }
-
-        .kv {
-            border-radius: 6px;
-            padding: 1px 7px 2px;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 11.5px;
-            color: #bae7ff;
-            margin-bottom: 2px;
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-        }
-
-        .kv-label {
-            color: #8291b4;
-        }
-
-        .kv strong {
-            color: #bafcff;
-            font-weight: 600;
-        }
-
-        .sensor-status-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 6px;
-            font-size: 11.5px;
-        }
-
-        .sensor-status-label {
-            color: #8793b0;
-            text-transform: uppercase;
-            letter-spacing: 0.14em;
-            font-size: 10px;
-        }
-
-        .sensor-status-pill {
-            padding: 2px 9px;
-            border-radius: 999px;
-            border: 1px solid rgba(80,120,183,0.8);
-            background: linear-gradient(120deg, rgba(10,160,220,0.2), rgba(2,8,18,0.6));
-            font-size: 11px;
-        }
-
-        .sensor-status-pill strong {
-            color: #ff5560;
-        }
-
-        .calib-countdown {
-            font-weight: 600;
-            font-size: 12px;
-            color: #ffdd57;
-            margin-left: 6px;
-        }
-
-        .sensor-status-pill strong.sensor-switch.ON {
-            color: var(--ok);
-        }
-
-        .sensor-status-pill strong.sensor-switch.OFF {
-            color: var(--danger);
-        }
-
-        .sensor-status-pill strong.sensor-switch.CALIB {
-            color: var(--warn);
-        }
-
-        .action-panel-grid {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 8px;
-            margin-top: 2px;
-        }
-
-        .btn {
-            border-radius: 9px;
-            border: 1px solid rgba(90,130,200,0.75);
-            background: radial-gradient(circle at top, #1e273d 0, #060815 60%);
-            color: var(--text);
-            cursor: pointer;
-            font-weight: 600;
-            text-transform: uppercase;
+            font-family: ui-monospace;
             font-size: 12px;
-            outline: none;
-            box-shadow:
-                0 2px 4px rgba(0,0,0,0.75),
-                0 0 12px rgba(12,30,66,0.9);
-            padding: 6px 4px;
-            letter-spacing: 0.08em;
         }
 
-        .btn:hover {
-            border-color: var(--accent);
-            background: radial-gradient(circle at top, #273d54 0, #070a18 60%);
-            box-shadow:
-                0 0 16px rgba(29,240,255,0.18),
-                0 0 0 1px rgba(21,120,170,0.75);
-        }
-
-        .btn:active {
-            transform: translateY(1px) scale(0.99);
-            box-shadow:
-                0 1px 3px rgba(0,0,0,0.9),
-                0 0 10px rgba(17,150,210,0.65);
-        }
-
-        .btn.success {
+        .joy-readouts span strong {
             color: var(--ok);
-            border-color: rgba(80,192,120,0.85);
-        }
-
-        .btn.danger {
-            color: var(--danger);
-            border-color: rgba(190,80,110,0.9);
-        }
-
-        .right-column-stack {
-            display: grid;
-            grid-template-rows: auto auto 1fr;
-            gap: var(--grid-gap);
-        }
-
-        .robot-status-panel {
-            display: grid;
-            grid-template-columns: 1.1fr 1fr;
-            gap: 10px;
-            margin-top: 3px;
-        }
-
-        .robot-main {
-            border-radius: 9px;
-            border: 1px solid rgba(93,132,198,0.75);
-            padding: 6px 8px 7px;
-            background: radial-gradient(circle at top left, #171f33, #070a15);
-            box-shadow: inset 0 0 10px rgba(0,0,0,0.9);
-        }
-
-        .robot-secondary {
-            border-radius: 9px;
-            border: 1px solid rgba(84,126,188,0.65);
-            padding: 6px 8px 7px;
-            background: radial-gradient(circle at top, #141b31, #050812);
-            box-shadow: inset 0 0 8px rgba(0,0,0,0.85);
-        }
-
-        .robot-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            margin-bottom: 3px;
-            font-size: 12px;
-        }
-
-        .robot-row-label {
-            color: #8a98b6;
-            text-transform: uppercase;
-            letter-spacing: 0.14em;
-            font-size: 10px;
-        }
-
-        .robot-row-value {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            color: #c0f4ff;
-        }
-
-        .robot-btns {
-            display: flex;
-            gap: 5px;
-            margin-top: 5px;
-        }
-
-        .robot-btns .btn {
-            font-size: 11px;
-            padding: 5px 4px;
-            letter-spacing: 0.06em;
-        }
-
-        .timer {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            color: #b9f7ff;
-            font-size: 12px;
-            padding: 4px 8px;
-            border-radius: 7px;
-            background: radial-gradient(circle at left, #151f38, #050812);
-            border: 1px solid rgba(100,139,205,0.75);
-            box-shadow:
-                0 0 18px rgba(0,0,0,0.75),
-                0 0 0 1px rgba(11,28,52,0.9);
-            display: inline-block;
         }
 
         .console {
-            height: 220px;
-            background: radial-gradient(circle at top, #0d1628, #03050c);
-            border: 1px solid rgba(82,120,190,0.9);
-            border-radius: 9px;
-            padding: 7px 8px;
+            flex: 1 1 auto;
+            background: #061016;
+            border: 1px solid #17303b;
+            border-radius: 7px;
+            padding: 8px 7px;
             overflow: auto;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 12px;
+            font-family: ui-monospace;
+            font-size: 13px;
             color: #b2f3ff;
-            box-shadow:
-                inset 0 0 14px rgba(0,0,0,0.95),
-                0 0 22px rgba(13,180,230,0.18);
         }
 
         .console .line {
@@ -879,306 +615,246 @@ def home():
         .tag {
             display: inline-block;
             padding: 0 7px;
-            border-radius: 999px;
-            margin-right: 6px;
-            border: 1px solid rgba(80,150,215,0.8);
+            border-radius: 3px;
+            margin-right: 5px;
+            border: 1px solid #234a54;
             color: #baf9ff;
-            background: linear-gradient(135deg, #162331, #050812);
+            background: #141d20;
+            font-size: 12px;
+        }
+
+        .kv {
+            border: 1px dashed #18303c;
+            border-radius: 7px;
+            padding: 2px 7px;
+            font-family: ui-monospace;
+            font-size: 12px;
+            color: #aee9ef;
+            margin-bottom: 2px;
+            min-width: 0;
+            line-height: 1.3;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .kv strong {
+            color: var(--ok);
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .sensor-section-title {
+            margin-top: 4px;
+            margin-bottom: 2px;
+            text-decoration: underline;
+        }
+
+        .sensor-avg {
             font-size: 11px;
+            color: #c2f2ff;
+            margin-left: 6px;
         }
 
-        .console-time {
-            color: #7386ad;
-            margin-right: 6px;
+        .sensor-status-line {
+            margin-top: 4px;
+            font-size: 12px;
         }
 
-        @media (max-width: 1060px) {
-            .hub-grid {
-                grid-template-columns: 1.1fr 1.4fr;
-                grid-template-rows: auto auto;
-            }
-
-            .right-column-stack {
-                grid-row: 2;
-                grid-column: 1 / span 2;
-            }
+        .calib-countdown {
+            font-weight: 700;
+            font-size: 13px;
+            margin-left: 0.75em;
         }
 
-        @media (max-width: 840px) {
-            .hub-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .right-column-stack {
-                grid-row: auto;
-                grid-column: auto;
-            }
-        }
-
-        @media (max-width: 540px) {
-            .joystick-wrapper {
+        @media (max-width: 960px) {
+            .main-layout {
                 flex-direction: column;
-            }
-
-            .sensor-panel-layout {
-                grid-template-columns: 1fr;
-            }
-
-            .robot-status-panel {
-                grid-template-columns: 1fr;
             }
         }
     </style>
 </head>
 <body>
-<div class="hub-shell">
-    <h1>Control Hub</h1>
-    <div class="hub-grid">
+<div class="top-bar">
+    <div class="top-row">
+        <div class="top-row-left">
+            <div class="top-title">Control Hub</div>
+        </div>
+        <div class="top-row-right">
+            <!-- ON row -->
+            <button class="top-btn success" onclick="startMotorTest()">Motors ON</button>
+            <button class="top-btn success" onclick="toggleSensor(true)">Sensors ON</button>
+            <button class="top-btn neutral" onclick="startML()">ML ON</button>
+            <button class="top-btn neutral" onclick="startAutonav()">Auto Nav ON</button>
+        </div>
+    </div>
+    <div class="bottom-row">
+        <div class="bottom-row-left">
+            <span class="top-status">
+                <span>Sens <strong id="sensor-switch" class="OFF">OFF</strong></span>
+                &nbsp;&nbsp;
+                <span>Calib <span class="calib-countdown" id="calib-status">Auto</span></span>
+            </span>
+        </div>
+        <div class="bottom-row-right">
+            <!-- OFF row -->
+            <button class="top-btn danger" onclick="stopMotorTest()">Motors OFF</button>
+            <button class="top-btn danger" onclick="toggleSensor(false)">Sensors OFF</button>
+            <button class="top-btn danger" onclick="stopML()">ML OFF</button>
+            <button class="top-btn danger" onclick="stopAutonav()">Auto Nav OFF</button>
+        </div>
+    </div>
+</div>
+
+<div class="main-layout">
+    <div class="col-left">
         <div class="panel">
-            <div class="panel-inner">
-                <div class="panel-title-row">
-                    <div class="panel-title">Joystick &amp; Sensors</div>
-                    <div class="panel-subtitle">Manual override / live telemetry</div>
+            <div class="panel-title">Joystick Input</div>
+            <div class="joystick-wrapper">
+                <div id="joystick-area" class="joystick-area">
+                    <div id="joystick-base" class="joystick-base"></div>
+                    <div id="joystick-knob" class="joystick-knob"></div>
                 </div>
-
-                <div class="left-column-stack">
-                    <div class="joystick-section">
-                        <div class="joystick-wrapper">
-                            <div class="joystick-area-shell">
-                                <div id="joystick-area" class="joystick-area">
-                                    <div class="joystick-grid-h"></div>
-                                    <div class="joystick-grid-v"></div>
-                                    <div class="joystick-base-ring"></div>
-                                    <div class="joystick-knob" id="joystick-knob"></div>
-                                    <div class="joystick-lights"></div>
-                                </div>
-                            </div>
-
-                            <div class="joy-readouts-block">
-                                <div class="joy-readouts">
-                                    <div class="joy-chip">
-                                        <span class="joy-chip-label">X</span>
-                                        <span class="joy-chip-value" id="joy-x">0.0</span>
-                                    </div>
-                                    <div class="joy-chip">
-                                        <span class="joy-chip-label">Y</span>
-                                        <span class="joy-chip-value" id="joy-y">0.0</span>
-                                    </div>
-                                </div>
-                                <div class="joy-trash">
-                                    <span>Drag inside the pad to send normalized joystick commands.</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="sensor-panel-layout">
-                            <div class="sensor-block">
-                                <div class="sensor-header">
-                                    <div class="sensor-header-label">IMU1 attitude</div>
-                                    <div class="sensor-chip">
-                                        <span id="imu-time">Time</span>
-                                        <span class="calib-countdown" id="calib-status">Auto</span>
-                                    </div>
-                                </div>
-
-                                <div class="kv">
-                                    <span class="kv-label">FB Tilt</span>
-                                    <strong id="imu1-fb"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">SS Tilt</span>
-                                    <strong id="imu1-ss"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Yaw</span>
-                                    <strong id="imu1-yaw"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Pitch Rate</span>
-                                    <strong id="imu1-pitch"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Roll Rate</span>
-                                    <strong id="imu1-roll"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Rot Vel</span>
-                                    <strong id="imu1-rot"></strong>
-                                </div>
-                            </div>
-
-                            <div class="sensor-block">
-                                <div class="sensor-header">
-                                    <div class="sensor-header-label">IMU2 + encoders</div>
-                                    <div class="sensor-chip">Derived state</div>
-                                </div>
-
-                                <div class="kv">
-                                    <span class="kv-label">IMU2 FB Tilt</span>
-                                    <strong id="imu2-fb"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">IMU2 SS Tilt</span>
-                                    <strong id="imu2-ss"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">IMU2 Yaw</span>
-                                    <strong id="imu2-yaw"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">IMU2 Pitch Rate</span>
-                                    <strong id="imu2-pitch"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">IMU2 Roll Rate</span>
-                                    <strong id="imu2-roll"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">IMU2 Rot Vel</span>
-                                    <strong id="imu2-rot"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">IMU1 Linear Vel</span>
-                                    <strong id="imu1linear-lv"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">IMU1 X vel</span>
-                                    <strong id="imu1linear-xv"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">IMU1 Y vel</span>
-                                    <strong id="imu1linear-yv"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Robot Yaw Rate</span>
-                                    <strong id="robot-yaw-rate"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Pendulum Ang Vel</span>
-                                    <strong id="pend-angvel"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Pendulum Angle</span>
-                                    <strong id="pend-angle"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Pend Angle (deg)</span>
-                                    <strong id="pend-angle-deg"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Enc L Speed</span>
-                                    <strong id="enc-l-val"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Enc L Dir</span>
-                                    <strong id="enc-l-status"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Enc R Speed</span>
-                                    <strong id="enc-r-val"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Enc R Dir</span>
-                                    <strong id="enc-r-status"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Ultrasonic Right</span>
-                                    <strong id="ultra-right"></strong>
-                                </div>
-                                <div class="kv">
-                                    <span class="kv-label">Ultrasonic Left</span>
-                                    <strong id="ultra-left"></strong>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="sensor-status-row">
-                            <div class="sensor-status-label">Sensor Stack</div>
-                            <div class="sensor-status-pill">
-                                <span>Sensors:</span>
-                                <strong id="sensor-switch" class="sensor-switch OFF">OFF</strong>
-                            </div>
-                        </div>
-                    </div>
+                <div class="joy-readouts">
+                    <span>X: <strong id="joy-x">0.00</strong></span>
+                    <span>Y: <strong id="joy-y">0.00</strong></span>
                 </div>
             </div>
         </div>
+    </div>
 
-        <div class="panel">
-            <div class="panel-inner">
-                <div class="panel-title-row">
-                    <div class="panel-title">Action Panel</div>
-                    <div class="panel-subtitle">Pipeline &amp; behaviors</div>
-                </div>
-
-                <div class="action-panel-grid">
-                    <button class="btn danger" onclick="getTopRow()">Remove Row</button>
-                    <button class="btn success" onclick="toggleSensor(true)">Sensors ON</button>
-                    <button class="btn danger" onclick="toggleSensor(false)">Sensors OFF</button>
-
-                    <button class="btn" onclick="startMotorTest()">Start Motor</button>
-                    <button class="btn" onclick="stopMotorTest()">Stop Motor</button>
-
-                    <button class="btn success" onclick="startML()">ML Start</button>
-                    <button class="btn danger" onclick="stopML()">ML Stop</button>
-
-                    <button class="btn success" onclick="startAutonav()">AutoNav Start</button>
-                    <button class="btn danger" onclick="stopAutonav()">AutoNav Stop</button>
-                    <span></span>
-                </div>
-            </div>
+    <div class="col-center">
+        <div class="panel console-panel">
+            <div class="panel-title">Event Console</div>
+            <div class="console" id="console"></div>
         </div>
+    </div>
 
-        <div class="panel right-column-stack">
-            <div class="panel-inner">
-                <div class="panel-title-row">
-                    <div class="panel-title">Robot Status</div>
-                    <div class="panel-subtitle">Drive / power</div>
+    <div class="col-right">
+        <div class="panel">
+            <div class="panel-title">Sensor Feed with 3s Averages</div>
+            <div id="sensor-feed-panel">
+                <div class="kv">
+                    <span><strong id="imu-time">Time</strong></span>
+                    <span class="sensor-avg" id="imu-time-avg"></span>
                 </div>
 
-                <div class="robot-status-panel">
-                    <div class="robot-main">
-                        <div class="robot-row">
-                            <span class="robot-row-label">Speed</span>
-                            <span class="robot-row-value" id="robot-speed">0</span>
-                        </div>
-                        <div class="robot-btns">
-                            <button class="btn" onclick="setSpeed('slow')">Slow</button>
-                            <button class="btn" onclick="setSpeed('med')">Medium</button>
-                            <button class="btn" onclick="setSpeed('fast')">Fast</button>
-                            <button class="btn" onclick="brakeRobot()">Brake</button>
-                        </div>
-                    </div>
+                <div class="sensor-section-title">IMU1</div>
+                <div class="kv">
+                    <span>FB Tilt</span>
+                    <span><strong id="imu1-fb"></strong><span class="sensor-avg" id="imu1-fb-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>SS Tilt</span>
+                    <span><strong id="imu1-ss"></strong><span class="sensor-avg" id="imu1-ss-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Yaw</span>
+                    <span><strong id="imu1-yaw"></strong><span class="sensor-avg" id="imu1-yaw-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Pitch Rate</span>
+                    <span><strong id="imu1-pitch"></strong><span class="sensor-avg" id="imu1-pitch-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Roll Rate</span>
+                    <span><strong id="imu1-roll"></strong><span class="sensor-avg" id="imu1-roll-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Rot Vel</span>
+                    <span><strong id="imu1-rot"></strong><span class="sensor-avg" id="imu1-rot-avg"></span></span>
+                </div>
 
-                    <div class="robot-secondary">
-                        <div class="robot-row">
-                            <span class="robot-row-label">Braking</span>
-                            <span class="robot-row-value" id="robot-brake">OFF</span>
-                        </div>
-                        <div class="robot-row">
-                            <span class="robot-row-label">Battery</span>
-                            <span class="robot-row-value" id="robot-battery">0</span>
-                        </div>
-                        <div class="robot-row">
-                            <span class="robot-row-label">Status</span>
-                            <span class="robot-row-value" id="robot-switch">OFF</span>
-                        </div>
-                    </div>
+                <div class="sensor-section-title">IMU2</div>
+                <div class="kv">
+                    <span>FB Tilt</span>
+                    <span><strong id="imu2-fb"></strong><span class="sensor-avg" id="imu2-fb-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>SS Tilt</span>
+                    <span><strong id="imu2-ss"></strong><span class="sensor-avg" id="imu2-ss-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Yaw</span>
+                    <span><strong id="imu2-yaw"></strong><span class="sensor-avg" id="imu2-yaw-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Pitch Rate</span>
+                    <span><strong id="imu2-pitch"></strong><span class="sensor-avg" id="imu2-pitch-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Roll Rate</span>
+                    <span><strong id="imu2-roll"></strong><span class="sensor-avg" id="imu2-roll-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Rot Vel</span>
+                    <span><strong id="imu2-rot"></strong><span class="sensor-avg" id="imu2-rot-avg"></span></span>
+                </div>
+
+                <div class="sensor-section-title">IMU1 Linear</div>
+                <div class="kv">
+                    <span>Linear Vel</span>
+                    <span><strong id="imu1linear-lv"></strong><span class="sensor-avg" id="imu1linear-lv-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>X velocity</span>
+                    <span><strong id="imu1linear-xv"></strong><span class="sensor-avg" id="imu1linear-xv-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Y velocity</span>
+                    <span><strong id="imu1linear-yv"></strong><span class="sensor-avg" id="imu1linear-yv-avg"></span></span>
+                </div>
+
+                <div class="sensor-section-title">EncoderL</div>
+                <div class="kv">
+                    <span>Speed</span>
+                    <span><strong id="enc-l-val"></strong><span class="sensor-avg" id="enc-l-val-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Direction</span>
+                    <span><strong id="enc-l-status"></strong><span class="sensor-avg" id="enc-l-status-avg"></span></span>
+                </div>
+
+                <div class="sensor-section-title">EncoderR</div>
+                <div class="kv">
+                    <span>Speed</span>
+                    <span><strong id="enc-r-val"></strong><span class="sensor-avg" id="enc-r-val-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Direction</span>
+                    <span><strong id="enc-r-status"></strong><span class="sensor-avg" id="enc-r-status-avg"></span></span>
+                </div>
+
+                <div class="sensor-section-title">Robot / Pendulum</div>
+                <div class="kv">
+                    <span>Robot Yaw Rate</span>
+                    <span><strong id="robot-yaw-rate"></strong><span class="sensor-avg" id="robot-yaw-rate-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Pendulum Ang Vel</span>
+                    <span><strong id="pend-ang-vel"></strong><span class="sensor-avg" id="pend-ang-vel-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Pendulum Angle</span>
+                    <span><strong id="pend-angle"></strong><span class="sensor-avg" id="pend-angle-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Pend Angle (deg)</span>
+                    <span><strong id="pend-angle-deg"></strong><span class="sensor-avg" id="pend-angle-deg-avg"></span></span>
+                </div>
+
+                <div class="sensor-section-title">Ultrasonic</div>
+                <div class="kv">
+                    <span>Right (cm)</span>
+                    <span><strong id="ultra-right"></strong><span class="sensor-avg" id="ultra-right-avg"></span></span>
+                </div>
+                <div class="kv">
+                    <span>Left (cm)</span>
+                    <span><strong id="ultra-left"></strong><span class="sensor-avg" id="ultra-left-avg"></span></span>
                 </div>
             </div>
 
-            <div class="panel-inner">
-                <div class="timer" id="timer">Task time: 0.00s</div>
-            </div>
-
-            <div class="panel-inner">
-                <div class="panel-title-row">
-                    <div class="panel-title">Event Console</div>
-                    <div class="panel-subtitle">Recent events</div>
-                </div>
-                <div class="console" id="console"></div>
+            <div class="sensor-status-line">
+                Sensor state shown in top bar
             </div>
         </div>
     </div>
@@ -1189,48 +865,172 @@ def home():
         document.getElementById(el).textContent = val;
     }
 
+    // Rolling window for last 3 seconds (3s / 0.25s = 12 samples)
+    const SENSOR_HISTORY_WINDOW = 3.0; // seconds
+    const SENSOR_POLL_MS = 250;
+    const SENSOR_MAX_SAMPLES = Math.ceil(SENSOR_HISTORY_WINDOW * 1000 / SENSOR_POLL_MS);
+
+    const sensorNumericKeys = {
+        "imu1-fb": ["IMU1", "Forward/backwards Tilt"],
+        "imu1-ss": ["IMU1", "Side-to-Side Tilt"],
+        "imu1-yaw": ["IMU1", "Yaw"],
+        "imu1-pitch": ["IMU1", "Pitch Rate"],
+        "imu1-roll": ["IMU1", "Roll Rate"],
+        "imu1-rot": ["IMU1", "Rotational Velocity"],
+
+        "imu2-fb": ["IMU2", "Forward/backwards Tilt"],
+        "imu2-ss": ["IMU2", "Side-to-Side Tilt"],
+        "imu2-yaw": ["IMU2", "Yaw"],
+        "imu2-pitch": ["IMU2", "Pitch Rate"],
+        "imu2-roll": ["IMU2", "Roll Rate"],
+        "imu2-rot": ["IMU2", "Rotational Velocity"],
+
+        "imu1linear-lv": ["IMU1Linear", "Linear Velocity"],
+        "imu1linear-xv": ["IMU1Linear", "X velocity"],
+        "imu1linear-yv": ["IMU1Linear", "Y velocity"],
+
+        "enc-l-val": ["EncoderL", "Speed"],
+        "enc-r-val": ["EncoderR", "Speed"],
+
+        "robot-yaw-rate": ["Robot", "Yaw Rate"],
+        "pend-ang-vel": ["Pendulum", "Angular Velocity"],
+        "pend-angle": ["Pendulum", "Angle"],
+        "pend-angle-deg": ["Pendulum", "AngleDeg"],
+        "ultra-right": ["Ultrasonic", "Right"],
+        "ultra-left": ["Ultrasonic", "Left"],
+    };
+
+    const sensorHistory = {};
+    Object.keys(sensorNumericKeys).forEach(k => sensorHistory[k] = []);
+
+    function addSample(key, value) {
+        const arr = sensorHistory[key];
+        const num = parseFloat(value);
+        if (!isNaN(num)) {
+            arr.push(num);
+            if (arr.length > SENSOR_MAX_SAMPLES) arr.shift();
+        }
+    }
+
+    function computeAvg(arr) {
+        if (!arr || arr.length === 0) return "";
+        let sum = 0;
+        for (let v of arr) sum += v;
+        const avg = sum / arr.length;
+        return avg.toFixed(1);
+    }
+
+    function updateAverages() {
+        Object.keys(sensorHistory).forEach(key => {
+            const avgEl = document.getElementById(key + "-avg");
+            if (!avgEl) return;
+            const avg = computeAvg(sensorHistory[key]);
+            avgEl.textContent = avg ? ("avg " + avg) : "";
+        });
+    }
+
     function updateSensorFeed() {
         fetch('/sensor_feed')
             .then(r => r.json())
             .then(data => {
                 getval('imu-time', data.IMU1["Time"]);
-                getval('imu1-fb', data.IMU1["Forward/backwards Tilt"]);
-                getval('imu1-ss', data.IMU1["Side-to-Side Tilt"]);
-                getval('imu1-yaw', data.IMU1["Yaw"]);
-                getval('imu1-pitch', data.IMU1["Pitch Rate"]);
-                getval('imu1-roll', data.IMU1["Roll Rate"]);
-                getval('imu1-rot', data.IMU1["Rotational Velocity"]);
 
-                getval('imu2-fb', data.IMU2["Forward/backwards Tilt"]);
-                getval('imu2-ss', data.IMU2["Side-to-Side Tilt"]);
-                getval('imu2-yaw', data.IMU2["Yaw"]);
-                getval('imu2-pitch', data.IMU2["Pitch Rate"]);
-                getval('imu2-roll', data.IMU2["Roll Rate"]);
-                getval('imu2-rot', data.IMU2["Rotational Velocity"]);
+                const vimu1fb = data.IMU1["Forward/backwards Tilt"];
+                const vimu1ss = data.IMU1["Side-to-Side Tilt"];
+                const vimu1yaw = data.IMU1["Yaw"];
+                const vimu1pitch = data.IMU1["Pitch Rate"];
+                const vimu1roll = data.IMU1["Roll Rate"];
+                const vimu1rot = data.IMU1["Rotational Velocity"];
 
-                getval('imu1linear-lv', data.IMU1Linear["Linear Velocity"]);
-                getval('imu1linear-xv', data.IMU1Linear["X velocity"]);
-                getval('imu1linear-yv', data.IMU1Linear["Y velocity"]);
+                const vimu2fb = data.IMU2["Forward/backwards Tilt"];
+                const vimu2ss = data.IMU2["Side-to-Side Tilt"];
+                const vimu2yaw = data.IMU2["Yaw"];
+                const vimu2pitch = data.IMU2["Pitch Rate"];
+                const vimu2roll = data.IMU2["Roll Rate"];
+                const vimu2rot = data.IMU2["Rotational Velocity"];
 
-                getval('robot-yaw-rate', data.Extra["Robot Yaw Rate"]);
-                getval('pend-angvel', data.Extra["Pendulum Angular Velocity"]);
-                getval('pend-angle', data.Extra["Pendulum Angle"]);
-                getval('pend-angle-deg', data.Extra["Pendulum Angle Deg"]);
+                const vlv = data.IMU1Linear["Linear Velocity"];
+                const vxv = data.IMU1Linear["X velocity"];
+                const vyv = data.IMU1Linear["Y velocity"];
 
-                getval('enc-l-val', data.EncoderL["Speed"]);
-                getval('enc-l-status', data.EncoderL["Direction"]);
-                getval('enc-r-val', data.EncoderR["Speed"]);
-                getval('enc-r-status', data.EncoderR["Direction"]);
+                const venclspd = data.EncoderL["Speed"];
+                const vencldir = data.EncoderL["Direction"];
+                const vencrspd = data.EncoderR["Speed"];
+                const vencrdir = data.EncoderR["Direction"];
 
-                getval('ultra-right', data.Extra["Ultrasonic Right"]);
-                getval('ultra-left', data.Extra["Ultrasonic Left"]);
+                const vrobotYaw = data.Robot["Yaw Rate"];
+                const vpendAngVel = data.Pendulum["Angular Velocity"];
+                const vpendAngle = data.Pendulum["Angle"];
+                const vpendAngleDeg = data.Pendulum["AngleDeg"];
+                const vultRight = data.Ultrasonic["Right"];
+                const vultLeft = data.Ultrasonic["Left"];
+
+                getval('imu1-fb', vimu1fb);
+                getval('imu1-ss', vimu1ss);
+                getval('imu1-yaw', vimu1yaw);
+                getval('imu1-pitch', vimu1pitch);
+                getval('imu1-roll', vimu1roll);
+                getval('imu1-rot', vimu1rot);
+
+                getval('imu2-fb', vimu2fb);
+                getval('imu2-ss', vimu2ss);
+                getval('imu2-yaw', vimu2yaw);
+                getval('imu2-pitch', vimu2pitch);
+                getval('imu2-roll', vimu2roll);
+                getval('imu2-rot', vimu2rot);
+
+                getval('imu1linear-lv', vlv);
+                getval('imu1linear-xv', vxv);
+                getval('imu1linear-yv', vyv);
+
+                getval('enc-l-val', venclspd);
+                getval('enc-l-status', vencldir);
+                getval('enc-r-val', vencrspd);
+                getval('enc-r-status', vencrdir);
+
+                getval('robot-yaw-rate', vrobotYaw);
+                getval('pend-ang-vel', vpendAngVel);
+                getval('pend-angle', vpendAngle);
+                getval('pend-angle-deg', vpendAngleDeg);
+                getval('ultra-right', vultRight);
+                getval('ultra-left', vultLeft);
+
+                addSample('imu1-fb', vimu1fb);
+                addSample('imu1-ss', vimu1ss);
+                addSample('imu1-yaw', vimu1yaw);
+                addSample('imu1-pitch', vimu1pitch);
+                addSample('imu1-roll', vimu1roll);
+                addSample('imu1-rot', vimu1rot);
+
+                addSample('imu2-fb', vimu2fb);
+                addSample('imu2-ss', vimu2ss);
+                addSample('imu2-yaw', vimu2yaw);
+                addSample('imu2-pitch', vimu2pitch);
+                addSample('imu2-roll', vimu2roll);
+                addSample('imu2-rot', vimu2rot);
+
+                addSample('imu1linear-lv', vlv);
+                addSample('imu1linear-xv', vxv);
+                addSample('imu1linear-yv', vyv);
+
+                addSample('enc-l-val', venclspd);
+                addSample('enc-r-val', vencrspd);
+
+                addSample('robot-yaw-rate', vrobotYaw);
+                addSample('pend-ang-vel', vpendAngVel);
+                addSample('pend-angle', vpendAngle);
+                addSample('pend-angle-deg', vpendAngleDeg);
+                addSample('ultra-right', vultRight);
+                addSample('ultra-left', vultLeft);
+
+                updateAverages();
             })
             .catch(err => {
                 console.error('Sensor feed error', err);
             });
     }
 
-    setInterval(updateSensorFeed, 250);
+    setInterval(updateSensorFeed, SENSOR_POLL_MS);
     updateSensorFeed();
 
     let calibTimer = null;
@@ -1243,15 +1043,15 @@ def home():
                 let s = document.getElementById('sensor-switch');
                 if (on && data.status === "ON") {
                     s.textContent = "ON";
-                    s.className = "sensor-switch CALIB";
-                    calibrateSensorCountdown(10, function() {
+                    s.className = "ON";
+                    startCalibrationCountdown(10, function () {
                         s.textContent = "ON";
-                        s.className = "sensor-switch ON";
+                        s.className = "ON";
                     });
                     logLine("SENSOR", logMsg);
                 } else if (!on && data.status === "OFF") {
                     s.textContent = "OFF";
-                    s.className = "sensor-switch OFF";
+                    s.className = "OFF";
                     document.getElementById('calib-status').textContent = "Auto";
                     if (calibTimer) clearInterval(calibTimer);
                     logLine("SENSOR", logMsg);
@@ -1261,49 +1061,27 @@ def home():
             });
     }
 
-    function calibrateSensorCountdown(seconds, doneCb) {
+    function startCalibrationCountdown(seconds, donecb) {
         let counter = seconds;
         document.getElementById('calib-status').textContent = "Calibrating " + counter;
-
         let s = document.getElementById('sensor-switch');
         s.textContent = "ON";
-        s.className = "sensor-switch CALIB";
+        s.className = "CALIB";
 
         if (calibTimer) clearInterval(calibTimer);
-        calibTimer = setInterval(function() {
+        calibTimer = setInterval(function () {
             counter--;
             document.getElementById('calib-status').textContent =
                 counter > 0 ? "Calibrating " + counter : "Done";
             if (counter <= 0) {
                 clearInterval(calibTimer);
-                if (doneCb) doneCb();
+                if (donecb) donecb();
             }
         }, 1000);
     }
 
-    function setSpeed(mode) {
-        let val = mode === "slow" ? 25 : (mode === "med" ? 42 : 88);
-        document.getElementById('robot-speed').textContent = val;
-        logLine("SPEED", "Speed set to " + mode.toUpperCase() + " (" + val + ")");
-    }
-
-    function brakeRobot() {
-        document.getElementById('robot-brake').textContent = "ON";
-        logLine("BRAKE", "Robot Braking activated");
-        setTimeout(function() {
-            document.getElementById('robot-brake').textContent = "OFF";
-        }, 900);
-    }
-
-    function getTopRow() {
-        logLine("ACTION", "Remove Row button pressed");
-        fetch('/get_top_row', { method: 'POST' })
-            .then(r => r.json())
-            .then(data => { });
-    }
-
     function startMotorTest() {
-        logLine("MOTOR", "Starting Motor Test (clearing numbers.txt)");
+        logLine("MOTOR", "Starting Motor Test clearing numbers.txt");
         fetch('/start_motor_test', { method: 'POST' })
             .then(r => r.json())
             .then(data => {
@@ -1314,7 +1092,7 @@ def home():
                 }
             })
             .catch(err => {
-                logLine("ERR", "Motor Test start error: " + err);
+                logLine("ERR", "Motor Test start error " + err);
             });
     }
 
@@ -1326,7 +1104,7 @@ def home():
                 logLine("MOTOR", "Motor Test stopped");
             })
             .catch(err => {
-                logLine("ERR", "Motor Test stop error: " + err);
+                logLine("ERR", "Motor Test stop error " + err);
             });
     }
 
@@ -1342,7 +1120,7 @@ def home():
                 }
             })
             .catch(err => {
-                logLine("ERR", "ML start error: " + err);
+                logLine("ERR", "ML start error " + err);
             });
     }
 
@@ -1354,7 +1132,7 @@ def home():
                 logLine("ML", "ML stopped");
             })
             .catch(err => {
-                logLine("ERR", "ML stop error: " + err);
+                logLine("ERR", "ML stop error " + err);
             });
     }
 
@@ -1370,7 +1148,7 @@ def home():
                 }
             })
             .catch(err => {
-                logLine("ERR", "AutoNav start error: " + err);
+                logLine("ERR", "AutoNav start error " + err);
             });
     }
 
@@ -1382,7 +1160,7 @@ def home():
                 logLine("AUTONAV", "AutoNav stopped");
             })
             .catch(err => {
-                logLine("ERR", "AutoNav stop error: " + err);
+                logLine("ERR", "AutoNav stop error " + err);
             });
     }
 
@@ -1391,21 +1169,18 @@ def home():
         if (!c) return;
         const div = document.createElement('div');
         div.className = 'line';
-        const timeSpan = document.createElement('span');
-        timeSpan.className = 'console-time';
-        timeSpan.textContent = new Date().toLocaleTimeString();
         const t = document.createElement('span');
         t.className = 'tag';
         t.textContent = tag;
         const span = document.createElement('span');
         span.textContent = text;
-        div.appendChild(timeSpan);
         div.appendChild(t);
         div.appendChild(span);
         c.appendChild(div);
         c.scrollTop = c.scrollHeight;
     }
 
+    // Joystick logic
     const area = document.getElementById('joystick-area');
     const knob = document.getElementById('joystick-knob');
     let joyCenter = { x: area.clientWidth / 2, y: area.clientHeight / 2 };
@@ -1438,7 +1213,7 @@ def home():
             }
         })
         .catch(err => {
-            if (shouldLog) logLine("ERR", "Joystick send failed: " + err);
+            if (shouldLog) logLine("ERR", "Joystick send failed " + err);
         });
     }
 
@@ -1468,16 +1243,16 @@ def home():
         if (normX < -1) normX = -1;
         if (normX > 1.2) normX = 1.2;
 
-        document.getElementById('joy-x').textContent = normX.toFixed(1);
-        document.getElementById('joy-y').textContent = normY.toFixed(1);
+        document.getElementById('joy-x').textContent = normX.toFixed(2);
+        document.getElementById('joy-y').textContent = normY.toFixed(2);
 
         sendJoystick(normX, normY);
     }
 
     function resetJoystick() {
         setKnob(joyCenter.x - knob.clientWidth / 2, joyCenter.y - knob.clientHeight / 2);
-        document.getElementById('joy-x').textContent = "0.0";
-        document.getElementById('joy-y').textContent = "0.0";
+        document.getElementById('joy-x').textContent = "0.00";
+        document.getElementById('joy-y').textContent = "0.00";
         const now = Date.now();
         if (now - lastJoystickLog > joystickThrottleMs) {
             lastJoystickLog = now;
@@ -1485,37 +1260,37 @@ def home():
         }
     }
 
-    area.addEventListener('mousedown', function(e) {
-        joyActive = true;
+    area.addEventListener('mousedown', function (e) {
+        joyActive = True;
         updateJoystick(e.clientX, e.clientY);
     });
 
-    window.addEventListener('mousemove', function(e) {
+    window.addEventListener('mousemove', function (e) {
         if (joyActive) updateJoystick(e.clientX, e.clientY);
     });
 
-    window.addEventListener('mouseup', function() {
+    window.addEventListener('mouseup', function () {
         if (joyActive) {
             joyActive = false;
             resetJoystick();
         }
     });
 
-    area.addEventListener('touchstart', function(e) {
+    area.addEventListener('touchstart', function (e) {
         e.preventDefault();
         joyActive = true;
         const t = e.touches[0];
         updateJoystick(t.clientX, t.clientY);
     }, { passive: false });
 
-    area.addEventListener('touchmove', function(e) {
+    area.addEventListener('touchmove', function (e) {
         e.preventDefault();
         if (!joyActive) return;
         const t = e.touches[0];
         updateJoystick(t.clientX, t.clientY);
     }, { passive: false });
 
-    area.addEventListener('touchend', function(e) {
+    area.addEventListener('touchend', function (e) {
         e.preventDefault();
         if (joyActive) {
             joyActive = false;
