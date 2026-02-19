@@ -9,7 +9,7 @@ app = Flask(__name__)
 # ================================
 # PROGRAM DEFINITIONS (VARIABLES)
 # ================================
-IMU_SCRIPT = "imuencoderv4.py"
+IMU_SCRIPT = "sensor.py"
 MOTOR_TEST_SCRIPT = "motortest.py"
 ML_SCRIPT = "ml.py"
 AUTONAV_SCRIPT = "autonav.py"
