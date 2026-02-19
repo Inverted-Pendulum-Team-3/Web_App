@@ -111,11 +111,10 @@ def parse_sensor_line(line):
     """
     Parse a line like:
 
-    18:41:46, IMU1, Forward/backwards, 0.0000, Side-to-Side, 0.0000, Yaw, 0.0000, Pitch Rate, 0.0000, Roll Rate, 0.0000,
-    Rotational Velocity, 0.0000, IMU2, Tilt, 0.0000, Side-to-Side tilt, 0.0000, Yaw, 0.0000, Pitch Rate, 0.0000,
-    Roll Rate, 0.0000, Rotational Velocity, 0.0000, IMU1 Linear Velocity, 0.0000, IMU1's X-velocity, 0.0000,
-    IMU1's Y-velocity, 0.0000, Robot Yaw Rate, 0.0000, Pendulum Angular Velocity, 0.0000, Pendulum Angle, 0.0000,
-    Pendulum Angle (deg), 0.00, EncoderL, 0.0000, Direction, stopped, EncoderR, 0.0000, Direction, stopped   |   Ultrasonic Right: 36.7 cm   Ultrasonic Left: 10 cm
+    18:41:46, IMU1, Forward/backwards, 0.0000, Side-to-Side, 0.0000, Yaw, 0.0000, ...
+    ..., Robot Yaw Rate, 0.0000, Pendulum Angular Velocity, 0.0000, Pendulum Angle, 0.0000,
+    Pendulum Angle (deg), 0.00, EncoderL, 0.0000, Direction, stopped, EncoderR, 0.0000, Direction, stopped,
+    Ultrasonic Right, 36.7 cm, Ultrasonic Left, 10 cm
 
     and return a structured dict with all fields, numeric ones formatted to 2 significant figures.
     """
@@ -172,12 +171,7 @@ def parse_sensor_line(line):
         return f"{v:.2g}"
 
     try:
-        if "   |   " in line:
-            main_part, ultra_part = line.split("   |   ", 1)
-        else:
-            main_part, ultra_part = line, ""
-
-        tokens = [tok.strip() for tok in main_part.split(",")]
+        tokens = [tok.strip() for tok in line.split(",")]
         idx = 0
 
         # Time
@@ -286,23 +280,22 @@ def parse_sensor_line(line):
                     result["EncoderR"]["Direction"] = tokens[idx]
                     idx += 1
 
-        # Ultrasonic part
-        if ultra_part:
-            up = ultra_part.strip()
-            if "Ultrasonic Right:" in up:
-                try:
-                    seg = up.split("Ultrasonic Right:", 1)[1]
-                    val = seg.split("cm", 1)[0].strip()
-                    result["Ultrasonic"]["Right"] = num2sig(val)
-                except Exception as e:
-                    log_to_file("ERROR", f"Ultrasonic Right parse error: {e}")
-            if "Ultrasonic Left:" in up:
-                try:
-                    seg = up.split("Ultrasonic Left:", 1)[1]
-                    val = seg.split("cm", 1)[0].strip()
-                    result["Ultrasonic"]["Left"] = num2sig(val)
-                except Exception as e:
-                    log_to_file("ERROR", f"Ultrasonic Left parse error: {e}")
+        # Ultrasonic Right, val cm, Ultrasonic Left, val cm
+        if idx < len(tokens) and tokens[idx] == "Ultrasonic Right":
+            idx += 1
+            if idx < len(tokens):
+                val = tokens[idx]
+                val_num = val.replace("cm", "").strip()
+                result["Ultrasonic"]["Right"] = num2sig(val_num)
+                idx += 1
+
+        if idx < len(tokens) and tokens[idx] == "Ultrasonic Left":
+            idx += 1
+            if idx < len(tokens):
+                val = tokens[idx]
+                val_num = val.replace("cm", "").strip()
+                result["Ultrasonic"]["Left"] = num2sig(val_num)
+                idx += 1
 
     except Exception as e:
         log_to_file("ERROR", f"parse_sensor_line error: {e}")
