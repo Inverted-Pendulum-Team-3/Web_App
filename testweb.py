@@ -115,7 +115,7 @@ def parse_sensor_line(line):
     ..., Robot Yaw Rate, 0.0000, Pendulum Angular Velocity, 0.0000, Pendulum Angle, 0.0000,
     Pendulum Angle (deg), 0.00, EncoderL, 0.0000, Direction, stopped, EncoderR, 0.0000, Direction, stopped   |   Ultrasonic Right: 99.4 cm   Ultrasonic Left: 10 cm
 
-    and return a structured dict with all fields, numeric ones rounded to 1 decimal.
+    and return a structured dict with all fields, numeric ones formatted to 2 significant figures.
     """
     result = {
         "IMU1": {
@@ -162,11 +162,13 @@ def parse_sensor_line(line):
         },
     }
 
-    def num1(x):
+    def num2sig(x):
         try:
-            return f"{float(x):.1f}"
+            v = float(x)
         except Exception:
             return x
+        # 2 significant figures, preserves order of magnitude
+        return f"{v:.2g}"
 
     try:
         if "   |   " in line:
@@ -195,7 +197,7 @@ def parse_sensor_line(line):
             ]
             for label, key in imu1_map:
                 if idx + 1 < len(tokens) and tokens[idx] == label:
-                    result["IMU1"][key] = num1(tokens[idx + 1])
+                    result["IMU1"][key] = num2sig(tokens[idx + 1])
                     idx += 2
 
         # IMU2
@@ -211,59 +213,59 @@ def parse_sensor_line(line):
             ]
             for label, key in imu2_map:
                 if idx + 1 < len(tokens) and tokens[idx] == label:
-                    result["IMU2"][key] = num1(tokens[idx + 1])
+                    result["IMU2"][key] = num2sig(tokens[idx + 1])
                     idx += 2
 
         # IMU1 Linear Velocity
         if idx < len(tokens) and tokens[idx] == "IMU1 Linear Velocity":
             idx += 1
             if idx < len(tokens):
-                result["IMU1Linear"]["Linear Velocity"] = num1(tokens[idx])
+                result["IMU1Linear"]["Linear Velocity"] = num2sig(tokens[idx])
                 idx += 1
 
         if idx < len(tokens) and tokens[idx] == "IMU1's X-velocity":
             idx += 1
             if idx < len(tokens):
-                result["IMU1Linear"]["X velocity"] = num1(tokens[idx])
+                result["IMU1Linear"]["X velocity"] = num2sig(tokens[idx])
                 idx += 1
 
         if idx < len(tokens) and tokens[idx] == "IMU1's Y-velocity":
             idx += 1
             if idx < len(tokens):
-                result["IMU1Linear"]["Y velocity"] = num1(tokens[idx])
+                result["IMU1Linear"]["Y velocity"] = num2sig(tokens[idx])
                 idx += 1
 
         # Robot Yaw Rate
         if idx < len(tokens) and tokens[idx] == "Robot Yaw Rate":
             idx += 1
             if idx < len(tokens):
-                result["Robot"]["Yaw Rate"] = num1(tokens[idx])
+                result["Robot"]["Yaw Rate"] = num2sig(tokens[idx])
                 idx += 1
 
         # Pendulum values
         if idx < len(tokens) and tokens[idx] == "Pendulum Angular Velocity":
             idx += 1
             if idx < len(tokens):
-                result["Pendulum"]["Angular Velocity"] = num1(tokens[idx])
+                result["Pendulum"]["Angular Velocity"] = num2sig(tokens[idx])
                 idx += 1
 
         if idx < len(tokens) and tokens[idx] == "Pendulum Angle":
             idx += 1
             if idx < len(tokens):
-                result["Pendulum"]["Angle"] = num1(tokens[idx])
+                result["Pendulum"]["Angle"] = num2sig(tokens[idx])
                 idx += 1
 
         if idx < len(tokens) and tokens[idx] == "Pendulum Angle (deg)":
             idx += 1
             if idx < len(tokens):
-                result["Pendulum"]["AngleDeg"] = num1(tokens[idx])
+                result["Pendulum"]["AngleDeg"] = num2sig(tokens[idx])
                 idx += 1
 
         # EncoderL
         if idx < len(tokens) and tokens[idx] == "EncoderL":
             idx += 1
             if idx < len(tokens):
-                result["EncoderL"]["Speed"] = num1(tokens[idx])
+                result["EncoderL"]["Speed"] = num2sig(tokens[idx])
                 idx += 1
             if idx < len(tokens) and tokens[idx] == "Direction":
                 idx += 1
@@ -275,7 +277,7 @@ def parse_sensor_line(line):
         if idx < len(tokens) and tokens[idx] == "EncoderR":
             idx += 1
             if idx < len(tokens):
-                result["EncoderR"]["Speed"] = num1(tokens[idx])
+                result["EncoderR"]["Speed"] = num2sig(tokens[idx])
                 idx += 1
             if idx < len(tokens) and tokens[idx] == "Direction":
                 idx += 1
@@ -283,23 +285,23 @@ def parse_sensor_line(line):
                     result["EncoderR"]["Direction"] = tokens[idx]
                     idx += 1
 
-        # Ultrasonic part
+        # Ultrasonic part, e.g. "Ultrasonic Right: 99.4 cm   Ultrasonic Left: 10 cm"
         if ultra_part:
-            up = ultra_part
+            up = ultra_part.strip()
             if "Ultrasonic Right:" in up:
                 try:
                     seg = up.split("Ultrasonic Right:", 1)[1]
                     val = seg.split("cm", 1)[0].strip()
-                    result["Ultrasonic"]["Right"] = num1(val)
-                except Exception:
-                    pass
+                    result["Ultrasonic"]["Right"] = num2sig(val)
+                except Exception as e:
+                    log_to_file("ERROR", f"Ultrasonic Right parse error: {e}")
             if "Ultrasonic Left:" in up:
                 try:
                     seg = up.split("Ultrasonic Left:", 1)[1]
                     val = seg.split("cm", 1)[0].strip()
-                    result["Ultrasonic"]["Left"] = num1(val)
-                except Exception:
-                    pass
+                    result["Ultrasonic"]["Left"] = num2sig(val)
+                except Exception as e:
+                    log_to_file("ERROR", f"Ultrasonic Left parse error: {e}")
 
     except Exception as e:
         log_to_file("ERROR", f"parse_sensor_line error: {e}")
@@ -680,7 +682,6 @@ def home():
             <div class="top-title">Control Hub</div>
         </div>
         <div class="top-row-right">
-            <!-- ON row -->
             <button class="top-btn success" onclick="startMotorTest()">Motors ON</button>
             <button class="top-btn success" onclick="toggleSensor(true)">Sensors ON</button>
             <button class="top-btn neutral" onclick="startML()">ML ON</button>
@@ -696,7 +697,6 @@ def home():
             </span>
         </div>
         <div class="bottom-row-right">
-            <!-- OFF row -->
             <button class="top-btn danger" onclick="stopMotorTest()">Motors OFF</button>
             <button class="top-btn danger" onclick="toggleSensor(false)">Sensors OFF</button>
             <button class="top-btn danger" onclick="stopML()">ML OFF</button>
@@ -865,8 +865,7 @@ def home():
         document.getElementById(el).textContent = val;
     }
 
-    // Rolling window for last 3 seconds (3s / 0.25s = 12 samples)
-    const SENSOR_HISTORY_WINDOW = 3.0; // seconds
+    const SENSOR_HISTORY_WINDOW = 3.0;
     const SENSOR_POLL_MS = 250;
     const SENSOR_MAX_SAMPLES = Math.ceil(SENSOR_HISTORY_WINDOW * 1000 / SENSOR_POLL_MS);
 
@@ -917,7 +916,7 @@ def home():
         let sum = 0;
         for (let v of arr) sum += v;
         const avg = sum / arr.length;
-        return avg.toFixed(1);
+        return avg.toFixed(2);
     }
 
     function updateAverages() {
@@ -1180,7 +1179,6 @@ def home():
         c.scrollTop = c.scrollHeight;
     }
 
-    // Joystick logic
     const area = document.getElementById('joystick-area');
     const knob = document.getElementById('joystick-knob');
     let joyCenter = { x: area.clientWidth / 2, y: area.clientHeight / 2 };
@@ -1261,7 +1259,7 @@ def home():
     }
 
     area.addEventListener('mousedown', function (e) {
-        joyActive = True;
+        joyActive = true;
         updateJoystick(e.clientX, e.clientY);
     });
 
