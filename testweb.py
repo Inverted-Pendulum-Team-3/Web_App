@@ -10,13 +10,11 @@ app = Flask(__name__)
 # ================================
 # PROGRAM DEFINITIONS (VARIABLES)
 # ================================
-# Central place for all scripts controlled by this webserver.
 IMU_SCRIPT = "imuencoderv4.py"
 MOTOR_TEST_SCRIPT = "motortest.py"
 ML_SCRIPT = "ml.py"
 AUTONAV_SCRIPT = "autonav.py"
 
-# Map logical program names to script filenames.
 PROGRAMS = {
     "imu": IMU_SCRIPT,
     "motortest": MOTOR_TEST_SCRIPT,
@@ -24,7 +22,6 @@ PROGRAMS = {
     "autonav": AUTONAV_SCRIPT,
 }
 
-# Program process handles
 PROGRAM_PROCS = {name: None for name in PROGRAMS}
 
 # Joystick throttling
@@ -87,7 +84,7 @@ def stop_program(name):
         PROGRAM_PROCS[name] = None
 
 
-# Backwards-compatible helpers for existing routes
+# Legacy-specific helpers
 def is_imu_running():
     return is_program_running("imu")
 
@@ -134,11 +131,9 @@ def get_latest_sensor_row(db_path=DB_FILE):
 
 def parse_sensor_row_to_frontend(row):
     """
-    Convert a sqlite3.Row from sensor_readings into the structure
-    expected by the existing frontend (same keys as parse_sensor_line).
-    Uses column names from query_sensor_db.py. [file:2]
+    Adapt SQLite row (sensor_readings) to the IMU/Encoder structure
+    that the frontend expects. Uses column names like in query_sensor_db.py. [file:2]
     """
-    # default zeros if no row
     if row is None:
         return {
             "IMU1": {
@@ -174,18 +169,15 @@ def parse_sensor_row_to_frontend(row):
         else:
             time_str = str(ts)
 
-        # Column names from query_sensor_db.py: imu1_body_pitch, imu1_yaw_rate,
-        # imu1_vx, imu2_pendulum_angle, imu2_pendulum_ang_vel,
-        # encoder_left_rad_s, encoder_right_rad_s, robot_v, robot_w_enc, etc. [file:2]
         imu1_pitch = row["imu1_body_pitch"]
         imu1_yaw_rate = row["imu1_yaw_rate"]
         imu1_vx = row["imu1_vx"]
-        imu2_pendulum_angle = row["imu2_pendulum_angle"]
-        imu2_pendulum_ang_vel = row["imu2_pendulum_ang_vel"]
+        imu2_angle = row["imu2_pendulum_angle"]
+        imu2_ang_vel = row["imu2_pendulum_ang_vel"]
         enc_l = row["encoder_left_rad_s"]
         enc_r = row["encoder_right_rad_s"]
 
-        result = {
+        return {
             "IMU1": {
                 "Time": time_str,
                 "Forward/backwards Tilt": f"{imu1_pitch:.4f}",
@@ -196,34 +188,27 @@ def parse_sensor_row_to_frontend(row):
                 "Rotational Velocity": f"{imu1_yaw_rate:.4f}",
             },
             "IMU2": {
-                "Forward/backwards Tilt": f"{imu2_pendulum_angle:.4f}",
+                "Forward/backwards Tilt": f"{imu2_angle:.4f}",
                 "Side-to-Side Tilt": "",
                 "Yaw": "",
                 "Pitch Rate": "",
                 "Roll Rate": "",
-                "Rotational Velocity": f"{imu2_pendulum_ang_vel:.4f}",
+                "Rotational Velocity": f"{imu2_ang_vel:.4f}",
             },
             "IMU1Linear": {
                 "Linear Velocity": f"{imu1_vx:.4f}",
                 "X velocity": f"{imu1_vx:.4f}",
                 "Y velocity": "",
             },
-            "EncoderL": {
-                "Speed": f"{enc_l:.4f}",
-                "Direction": "",
-            },
-            "EncoderR": {
-                "Speed": f"{enc_r:.4f}",
-                "Direction": "",
-            },
+            "EncoderL": {"Speed": f"{enc_l:.4f}", "Direction": ""},
+            "EncoderR": {"Speed": f"{enc_r:.4f}", "Direction": ""},
         }
-        return result
     except Exception as e:
         log_to_file("ERROR", f"parse_sensor_row_to_frontend error: {e}")
         return parse_sensor_row_to_frontend(None)
 
 
-# Keeping original parse_sensor_line for compatibility (not used by DB path)
+# Legacy text parser kept for compatibility (not used by DB path)
 def parse_sensor_line(line):
     result = {
         "IMU1": {
@@ -331,7 +316,6 @@ def parse_sensor_line(line):
 # ==============
 @app.route("/sensor_feed")
 def sensor_feed():
-    # Now read from SQLite instead of sensor_data.txt
     row = get_latest_sensor_row()
     return jsonify(parse_sensor_row_to_frontend(row))
 
@@ -364,7 +348,6 @@ def direction_ajax():
     y = float(data.get("y", 0.0))
     msg = f"Joystick x={x:.2f}, y={y:.2f}"
 
-    # Only log to file if enough time has passed
     if current_time - last_joystick_send >= joystick_throttle_interval:
         last_joystick_send = current_time
         log_to_file("JOYSTICK", msg)
@@ -391,7 +374,6 @@ def stop_motor_test_route():
     return jsonify({"status": "stopped"})
 
 
-# New routes for ML and AutoNav control
 @app.route("/start_ml", methods=["POST"])
 def start_ml_route():
     ok = start_program("ml")
@@ -418,101 +400,178 @@ def stop_autonav_route():
 
 @app.route("/")
 def home():
-    sensor_value = 42
     log_to_file("SYSTEM", "Web interface loaded")
-    return f"""
+    return """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
     <title>Control Hub</title>
     <style>
-        :root {{
-            --panel: #101820;
+        :root {
+            --bg: #050811;
+            --panel-bg: #0c1020;
+            --panel-border: #272b3b;
             --accent: #29f0ff;
-            --text: #d7f8ff;
-            --warn: #ffdd57;
+            --accent-soft: #1cb6c7;
+            --text: #e1f6ff;
+            --muted: #96a4c0;
+            --danger: #ff5560;
             --ok: #8dff8a;
-            --bad: #ff5560;
-            --bg: #0b0f14;
-            --grid-gap: 10px;
-        }}
+            --warn: #ffdd57;
+            --console-bg: #070b16;
+            --console-border: #1c2233;
+            --grid-gap: 14px;
+        }
 
-        body {{
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
             margin: 0;
             padding: 14px;
-            background: var(--bg);
+            background: radial-gradient(circle at top, #141a33 0, #050811 55%);
             color: var(--text);
-            font-family: system-ui, sans-serif;
-        }}
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 14px;
+        }
 
-        h1 {{
+        h1 {
             font-size: 1.1rem;
-            margin-bottom: 8px;
+            margin: 0 0 10px 2px;
             color: var(--accent);
-            text-shadow: 0 0 8px #29f0ff55;
-        }}
-
-        .hub-grid {{
-            display: grid;
-            grid-template-columns: 1.1fr 1.5fr 1.2fr;
-            gap: var(--grid-gap);
-        }}
-
-        .panel {{
-            background: var(--panel);
-            border-radius: 9px;
-            padding: 11px;
-            box-shadow: 0 2px 12px #0008;
-            margin-bottom: var(--grid-gap);
-        }}
-
-        .panel-title {{
-            font-size: 0.9rem;
-            font-weight: 600;
-            margin-bottom: 6px;
+            letter-spacing: 0.08em;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: var(--accent);
-        }}
+            text-shadow: 0 0 8px rgba(41,240,255,0.45);
+        }
 
-        .left-stack {{
+        .hub-shell {
+            max-width: 1240px;
+            margin: 0 auto;
+        }
+
+        .hub-grid {
+            display: grid;
+            grid-template-columns: 1.15fr 1.6fr 1.25fr;
+            gap: var(--grid-gap);
+        }
+
+        .panel {
+            background: linear-gradient(145deg, #0b0f1f, #060817);
+            border-radius: 11px;
+            border: 1px solid rgba(112,145,190,0.25);
+            box-shadow:
+                0 14px 30px rgba(0,0,0,0.75),
+                0 0 0 1px rgba(10,18,40,0.9),
+                0 0 42px rgba(15,180,220,0.08);
+            padding: 10px 11px 11px;
+            position: relative;
+        }
+
+        .panel::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: radial-gradient(circle at top left, rgba(41,240,255,0.08), transparent 60%);
+            pointer-events: none;
+        }
+
+        .panel-inner {
+            position: relative;
+            z-index: 1;
+        }
+
+        .panel-title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 6px;
+        }
+
+        .panel-title {
+            font-size: 0.88rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--accent-soft);
+        }
+
+        .panel-subtitle {
+            font-size: 0.7rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+        }
+
+        .left-column-stack {
             display: grid;
             gap: var(--grid-gap);
-        }}
+            grid-template-rows: auto 1.05fr;
+        }
 
-        .joystick-wrapper {{
+        .joystick-section {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            gap: 6px;
-        }}
+            gap: 8px;
+        }
 
-        .joystick-area {{
+        .joystick-wrapper {
+            display: flex;
+            gap: 10px;
+        }
+
+        .joystick-area-shell {
+            flex: 0 0 auto;
+        }
+
+        .joystick-area {
             position: relative;
-            width: 180px;
-            height: 180px;
+            width: 170px;
+            height: 170px;
             border-radius: 50%;
             margin-top: 4px;
-            background: radial-gradient(circle at 30% 30%, #1e2b36, #05090e);
-            border: 2px solid #18303c;
-            box-shadow: 0 0 10px #000a;
+            background:
+                radial-gradient(circle at 24% 18%, #273454 0, #0b0f1f 40%, #050714 80%);
+            border: 1px solid rgba(85,120,174,0.9);
+            box-shadow:
+                inset 0 0 18px rgba(0,0,0,0.7),
+                0 0 18px rgba(16,187,232,0.18);
             touch-action: none;
-        }}
+        }
 
-        .joystick-base {{
+        .joystick-grid-h,
+        .joystick-grid-v {
             position: absolute;
             left: 50%;
             top: 50%;
-            width: 140px;
-            height: 140px;
-            margin-left: -70px;
-            margin-top: -70px;
+            width: 86%;
+            height: 86%;
             border-radius: 50%;
-            border: 1px dashed #2a4f60;
-        }}
+            border: 1px dashed rgba(104,147,196,0.45);
+            transform: translate(-50%, -50%);
+        }
 
-        .joystick-knob {{
+        .joystick-grid-v {
+            width: 44%;
+            height: 102%;
+        }
+
+        .joystick-base-ring {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 120px;
+            height: 120px;
+            margin-left: -60px;
+            margin-top: -60px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 25%, #2df9ff33, transparent 60%);
+            box-shadow: inset 0 0 12px rgba(0,0,0,0.7);
+        }
+
+        .joystick-knob {
             position: absolute;
             left: 50%;
             top: 50%;
@@ -521,229 +580,532 @@ def home():
             margin-left: -30px;
             margin-top: -30px;
             border-radius: 50%;
-            background: radial-gradient(circle at 30% 30%, #3cf0ff, #0e4f5b);
-            box-shadow: 0 0 14px #29f0ffaa;
-        }}
+            background:
+                radial-gradient(circle at 25% 20%, #4cffff, #0f6ba0 56%, #03152d 92%);
+            box-shadow:
+                0 0 16px rgba(41,240,255,0.88),
+                0 0 32px rgba(11,150,210,0.8);
+            border: 1px solid rgba(200,255,255,0.7);
+        }
 
-        .joy-readouts {{
+        .joystick-lights {
+            position: absolute;
+            inset: 5px;
+            border-radius: 50%;
+            background:
+                radial-gradient(circle at 16% 18%, rgba(255,255,255,0.09), transparent 72%),
+                radial-gradient(circle at 80% 80%, rgba(6,207,255,0.2), transparent 72%);
+            mix-blend-mode: screen;
+            pointer-events: none;
+        }
+
+        .joy-readouts-block {
+            flex: 1;
             display: flex;
-            gap: 8px;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .joy-readouts {
+            display: flex;
+            gap: 10px;
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
             font-size: 12px;
-        }}
+        }
 
-        .joy-readouts span strong {{
-            color: var(--ok);
-        }}
-
-        .kv {{
-            border: 1px dashed #18303c;
-            border-radius: 7px;
-            padding: 2px 7px;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 12px;
-            color: #aee9ef;
-            margin-bottom: 2px;
-            min-width: 0;
-            line-height: 1.3;
-        }}
-
-        .kv strong {{
-            color: var(--ok);
-            font-weight: 600;
-            font-size: 13px;
-        }}
-
-        .sensor-panel {{
-            margin-bottom: 7px;
-        }}
-
-        .calib-countdown {{
-            font-weight: 700;
-            font-size: 14px;
-            margin-left: 0.75em;
-        }}
-
-        .sensor-status strong.sensor-switch.ON {{
-            color: var(--ok);
-        }}
-
-        .sensor-status strong.sensor-switch.OFF {{
-            color: var(--bad);
-        }}
-
-        .sensor-status strong.sensor-switch.CALIB {{
-            color: var(--warn);
-        }}
-
-        .right-stack {{
-            display: grid;
-            grid-template-rows: auto 1fr auto;
-            gap: var(--grid-gap);
-        }}
-
-        .grid-3x3 {{
-            display: grid;
-            gap: 8px;
-            grid-template-columns: repeat(3, 1fr);
-        }}
-
-        .btn {{
-            background: #111;
-            border: 1px solid #18303c;
+        .joy-chip {
             border-radius: 8px;
+            padding: 3px 10px;
+            border: 1px solid rgba(87,140,196,0.65);
+            background: radial-gradient(circle at 0 0, #1d3344 0, #07101f 70%);
+            box-shadow:
+                0 0 12px rgba(0,0,0,0.8),
+                inset 0 0 6px rgba(0,0,0,0.7);
+            color: #d5f4ff;
+        }
+
+        .joy-chip-label {
+            color: #8ea0c0;
+            margin-right: 6px;
+        }
+
+        .joy-chip-value {
+            color: #aef8ff;
+            font-weight: 600;
+        }
+
+        .joy-trash {
+            font-size: 11px;
+            color: #7f8dad;
+            margin-top: 8px;
+        }
+
+        .joy-trash span {
+            opacity: 0.8;
+        }
+
+        .sensor-panel-layout {
+            display: grid;
+            grid-template-columns: 1.2fr 1.05fr;
+            gap: 10px;
+            margin-top: 3px;
+        }
+
+        .sensor-block {
+            border-radius: 9px;
+            border: 1px solid rgba(92,132,201,0.5);
+            padding: 6px 7px 7px;
+            background: radial-gradient(circle at top left, #192338, #080b14);
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.9);
+        }
+
+        .sensor-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .sensor-header-label {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--muted);
+        }
+
+        .sensor-chip {
+            padding: 2px 9px;
+            border-radius: 999px;
+            border: 1px solid rgba(78,140,214,0.8);
+            background: linear-gradient(120deg, rgba(12,190,255,0.3), rgba(2,12,28,0.3));
+            font-size: 11px;
+            color: #e6fbff;
+        }
+
+        .kv {
+            border-radius: 6px;
+            padding: 1px 7px 2px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 11.5px;
+            color: #bae7ff;
+            margin-bottom: 2px;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+        }
+
+        .kv-label {
+            color: #8291b4;
+        }
+
+        .kv strong {
+            color: #bafcff;
+            font-weight: 600;
+        }
+
+        .sensor-status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 6px;
+            font-size: 11.5px;
+        }
+
+        .sensor-status-label {
+            color: #8793b0;
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            font-size: 10px;
+        }
+
+        .sensor-status-pill {
+            padding: 2px 9px;
+            border-radius: 999px;
+            border: 1px solid rgba(80,120,183,0.8);
+            background: linear-gradient(120deg, rgba(10,160,220,0.2), rgba(2,8,18,0.6));
+            font-size: 11px;
+        }
+
+        .sensor-status-pill strong {
+            color: #ff5560;
+        }
+
+        .calib-countdown {
+            font-weight: 600;
+            font-size: 12px;
+            color: #ffdd57;
+            margin-left: 6px;
+        }
+
+        .sensor-status-pill strong.sensor-switch.ON {
+            color: var(--ok);
+        }
+
+        .sensor-status-pill strong.sensor-switch.OFF {
+            color: var(--danger);
+        }
+
+        .sensor-status-pill strong.sensor-switch.CALIB {
+            color: var(--warn);
+        }
+
+        .action-panel-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            margin-top: 2px;
+        }
+
+        .btn {
+            border-radius: 9px;
+            border: 1px solid rgba(90,130,200,0.75);
+            background: radial-gradient(circle at top, #1e273d 0, #060815 60%);
             color: var(--text);
             cursor: pointer;
             font-weight: 600;
             text-transform: uppercase;
-            font-size: 13.5px;
+            font-size: 12px;
             outline: none;
-            box-shadow: 0 2px 6px #0006;
-            padding: 6px 0;
-        }}
+            box-shadow:
+                0 2px 4px rgba(0,0,0,0.75),
+                0 0 12px rgba(12,30,66,0.9);
+            padding: 6px 4px;
+            letter-spacing: 0.08em;
+        }
 
-        .btn:hover {{
+        .btn:hover {
             border-color: var(--accent);
-            background: #11262c;
-        }}
+            background: radial-gradient(circle at top, #273d54 0, #070a18 60%);
+            box-shadow:
+                0 0 16px rgba(29,240,255,0.18),
+                0 0 0 1px rgba(21,120,170,0.75);
+        }
 
-        .btn:active {{
-            transform: scale(0.97);
-        }}
+        .btn:active {
+            transform: translateY(1px) scale(0.99);
+            box-shadow:
+                0 1px 3px rgba(0,0,0,0.9),
+                0 0 10px rgba(17,150,210,0.65);
+        }
 
-        .btn.success {{
+        .btn.success {
             color: var(--ok);
-            border-color: #229953;
-        }}
+            border-color: rgba(80,192,120,0.85);
+        }
 
-        .btn.danger {{
-            color: var(--bad);
-            border-color: #a8444e;
-        }}
+        .btn.danger {
+            color: var(--danger);
+            border-color: rgba(190,80,110,0.9);
+        }
 
-        .btn-placeholder {{
-            color: #7aaac0;
-            border-style: dashed;
-            font-size: 12.5px;
-        }}
+        .right-column-stack {
+            display: grid;
+            grid-template-rows: auto auto 1fr;
+            gap: var(--grid-gap);
+        }
 
-        .robot-status-panel .kv,
-        .sensor-panel .kv {{
-            margin-bottom: 4px;
-        }}
+        .robot-status-panel {
+            display: grid;
+            grid-template-columns: 1.1fr 1fr;
+            gap: 10px;
+            margin-top: 3px;
+        }
 
-        .timer {{
+        .robot-main {
+            border-radius: 9px;
+            border: 1px solid rgba(93,132,198,0.75);
+            padding: 6px 8px 7px;
+            background: radial-gradient(circle at top left, #171f33, #070a15);
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.9);
+        }
+
+        .robot-secondary {
+            border-radius: 9px;
+            border: 1px solid rgba(84,126,188,0.65);
+            padding: 6px 8px 7px;
+            background: radial-gradient(circle at top, #141b31, #050812);
+            box-shadow: inset 0 0 8px rgba(0,0,0,0.85);
+        }
+
+        .robot-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 3px;
+            font-size: 12px;
+        }
+
+        .robot-row-label {
+            color: #8a98b6;
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            font-size: 10px;
+        }
+
+        .robot-row-value {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            color: #c0f4ff;
+        }
+
+        .robot-btns {
+            display: flex;
+            gap: 5px;
+            margin-top: 5px;
+        }
+
+        .robot-btns .btn {
+            font-size: 11px;
+            padding: 5px 4px;
+            letter-spacing: 0.06em;
+        }
+
+        .timer {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
             color: #b9f7ff;
-            font-size: 13px;
-            padding: 3px 7px;
+            font-size: 12px;
+            padding: 4px 8px;
             border-radius: 7px;
-            background: #0b1419;
-            border: 1px solid #18303c;
-        }}
+            background: radial-gradient(circle at left, #151f38, #050812);
+            border: 1px solid rgba(100,139,205,0.75);
+            box-shadow:
+                0 0 18px rgba(0,0,0,0.75),
+                0 0 0 1px rgba(11,28,52,0.9);
+            display: inline-block;
+        }
 
-        .console {{
-            height: 200px;
-            background: #061016;
-            border: 1px solid #17303b;
-            border-radius: 7px;
-            padding: 8px 7px;
+        .console {
+            height: 220px;
+            background: radial-gradient(circle at top, #0d1628, #03050c);
+            border: 1px solid rgba(82,120,190,0.9);
+            border-radius: 9px;
+            padding: 7px 8px;
             overflow: auto;
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 13px;
+            font-size: 12px;
             color: #b2f3ff;
-        }}
+            box-shadow:
+                inset 0 0 14px rgba(0,0,0,0.95),
+                0 0 22px rgba(13,180,230,0.18);
+        }
 
-        .console .line {{
+        .console .line {
             margin-bottom: 2px;
-        }}
+        }
 
-        .tag {{
+        .tag {
             display: inline-block;
             padding: 0 7px;
-            border-radius: 3px;
-            margin-right: 5px;
-            border: 1px solid #234a54;
+            border-radius: 999px;
+            margin-right: 6px;
+            border: 1px solid rgba(80,150,215,0.8);
             color: #baf9ff;
-            background: #141d20;
-            font-size: 12px;
-        }}
+            background: linear-gradient(135deg, #162331, #050812);
+            font-size: 11px;
+        }
 
-        @media (max-width: 910px) {{
-            .hub-grid {{
+        .console-time {
+            color: #7386ad;
+            margin-right: 6px;
+        }
+
+        @media (max-width: 1060px) {
+            .hub-grid {
+                grid-template-columns: 1.1fr 1.4fr;
+                grid-template-rows: auto auto;
+            }
+
+            .right-column-stack {
+                grid-row: 2;
+                grid-column: 1 / span 2;
+            }
+        }
+
+        @media (max-width: 840px) {
+            .hub-grid {
                 grid-template-columns: 1fr;
-            }}
-        }}
+            }
+
+            .right-column-stack {
+                grid-row: auto;
+                grid-column: auto;
+            }
+        }
+
+        @media (max-width: 540px) {
+            .joystick-wrapper {
+                flex-direction: column;
+            }
+
+            .sensor-panel-layout {
+                grid-template-columns: 1fr;
+            }
+
+            .robot-status-panel {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
+<div class="hub-shell">
     <h1>Control Hub</h1>
     <div class="hub-grid">
-        <div class="panel left-stack">
-            <div class="panel">
-                <div class="panel-title">Joystick Input</div>
-                <div class="joystick-wrapper">
-                    <div id="joystick-area" class="joystick-area">
-                        <div id="joystick-base" class="joystick-base"></div>
-                        <div id="joystick-knob" class="joystick-knob"></div>
-                    </div>
-                    <div class="joy-readouts">
-                        <span>X: <strong id="joy-x">0.00</strong></span>
-                        <span>Y: <strong id="joy-y">0.00</strong></span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="panel sensor-panel">
-                <div class="panel-title">Sensor Feed</div>
-                <div id="sensor-feed-panel">
-                    <div class="kv" style="display:flex; align-items:center;">
-                        <strong id="imu-time">Time</strong>
-                        <span class="calib-countdown" id="calib-status">Auto</span>
-                    </div>
-
-                    <div style="margin-bottom: 6px;">
-                        <u>IMU1</u>
-                    </div>
-                    <div class="kv">FB Tilt: <strong id="imu1-fb"></strong></div>
-                    <div class="kv">SS Tilt: <strong id="imu1-ss"></strong></div>
-                    <div class="kv">Yaw: <strong id="imu1-yaw"></strong></div>
-                    <div class="kv">Pitch Rate: <strong id="imu1-pitch"></strong></div>
-                    <div class="kv">Roll Rate: <strong id="imu1-roll"></strong></div>
-                    <div class="kv">Rot Vel: <strong id="imu1-rot"></strong></div>
-
-                    <div style="margin-bottom: 6px;"><u>IMU2</u></div>
-                    <div class="kv">FB Tilt: <strong id="imu2-fb"></strong></div>
-                    <div class="kv">SS Tilt: <strong id="imu2-ss"></strong></div>
-                    <div class="kv">Yaw: <strong id="imu2-yaw"></strong></div>
-                    <div class="kv">Pitch Rate: <strong id="imu2-pitch"></strong></div>
-                    <div class="kv">Roll Rate: <strong id="imu2-roll"></strong></div>
-                    <div class="kv">Rot Vel: <strong id="imu2-rot"></strong></div>
-
-                    <div style="margin-bottom: 6px;"><u>IMU1 Linear</u></div>
-                    <div class="kv">Linear Vel: <strong id="imu1linear-lv"></strong></div>
-                    <div class="kv">X velocity: <strong id="imu1linear-xv"></strong></div>
-                    <div class="kv">Y velocity: <strong id="imu1linear-yv"></strong></div>
-
-                    <div style="margin-bottom: 6px;"><u>EncoderL</u></div>
-                    <div class="kv">Speed: <strong id="enc-l-val"></strong></div>
-                    <div class="kv">Direction: <strong id="enc-l-status"></strong></div>
-
-                    <div style="margin-bottom: 6px;"><u>EncoderR</u></div>
-                    <div class="kv">Speed: <strong id="enc-r-val"></strong></div>
-                    <div class="kv">Direction: <strong id="enc-r-status"></strong></div>
+        <div class="panel">
+            <div class="panel-inner">
+                <div class="panel-title-row">
+                    <div class="panel-title">Joystick &amp; Sensors</div>
+                    <div class="panel-subtitle">Manual override / live telemetry</div>
                 </div>
 
-                <div class="sensor-status">
-                    <span>Sensors: <strong id="sensor-switch" class="OFF">OFF</strong></span>
+                <div class="left-column-stack">
+                    <div class="joystick-section">
+                        <div class="joystick-wrapper">
+                            <div class="joystick-area-shell">
+                                <div id="joystick-area" class="joystick-area">
+                                    <div class="joystick-grid-h"></div>
+                                    <div class="joystick-grid-v"></div>
+                                    <div class="joystick-base-ring"></div>
+                                    <div class="joystick-knob" id="joystick-knob"></div>
+                                    <div class="joystick-lights"></div>
+                                </div>
+                            </div>
+
+                            <div class="joy-readouts-block">
+                                <div class="joy-readouts">
+                                    <div class="joy-chip">
+                                        <span class="joy-chip-label">X</span>
+                                        <span class="joy-chip-value" id="joy-x">0.00</span>
+                                    </div>
+                                    <div class="joy-chip">
+                                        <span class="joy-chip-label">Y</span>
+                                        <span class="joy-chip-value" id="joy-y">0.00</span>
+                                    </div>
+                                </div>
+                                <div class="joy-trash">
+                                    <span>Drag inside the pad to send normalized joystick commands.</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="sensor-panel-layout">
+                            <div class="sensor-block">
+                                <div class="sensor-header">
+                                    <div class="sensor-header-label">IMU1 attitude</div>
+                                    <div class="sensor-chip">
+                                        <span id="imu-time">Time</span>
+                                        <span class="calib-countdown" id="calib-status">Auto</span>
+                                    </div>
+                                </div>
+
+                                <div class="kv">
+                                    <span class="kv-label">FB Tilt</span>
+                                    <strong id="imu1-fb"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">SS Tilt</span>
+                                    <strong id="imu1-ss"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">Yaw</span>
+                                    <strong id="imu1-yaw"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">Pitch Rate</span>
+                                    <strong id="imu1-pitch"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">Roll Rate</span>
+                                    <strong id="imu1-roll"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">Rot Vel</span>
+                                    <strong id="imu1-rot"></strong>
+                                </div>
+                            </div>
+
+                            <div class="sensor-block">
+                                <div class="sensor-header">
+                                    <div class="sensor-header-label">IMU2 + encoders</div>
+                                    <div class="sensor-chip">Derived state</div>
+                                </div>
+
+                                <div class="kv">
+                                    <span class="kv-label">IMU2 FB Tilt</span>
+                                    <strong id="imu2-fb"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">IMU2 SS Tilt</span>
+                                    <strong id="imu2-ss"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">IMU2 Yaw</span>
+                                    <strong id="imu2-yaw"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">IMU2 Pitch Rate</span>
+                                    <strong id="imu2-pitch"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">IMU2 Roll Rate</span>
+                                    <strong id="imu2-roll"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">IMU2 Rot Vel</span>
+                                    <strong id="imu2-rot"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">IMU1 Linear Vel</span>
+                                    <strong id="imu1linear-lv"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">IMU1 X vel</span>
+                                    <strong id="imu1linear-xv"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">IMU1 Y vel</span>
+                                    <strong id="imu1linear-yv"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">Enc L Speed</span>
+                                    <strong id="enc-l-val"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">Enc L Dir</span>
+                                    <strong id="enc-l-status"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">Enc R Speed</span>
+                                    <strong id="enc-r-val"></strong>
+                                </div>
+                                <div class="kv">
+                                    <span class="kv-label">Enc R Dir</span>
+                                    <strong id="enc-r-status"></strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="sensor-status-row">
+                            <div class="sensor-status-label">Sensor Stack</div>
+                            <div class="sensor-status-pill">
+                                <span>Sensors:</span>
+                                <strong id="sensor-switch" class="sensor-switch OFF">OFF</strong>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="panel right-stack">
-            <div class="panel">
-                <div class="panel-title">Action Panel</div>
-                <div class="grid-3x3">
+        <div class="panel">
+            <div class="panel-inner">
+                <div class="panel-title-row">
+                    <div class="panel-title">Action Panel</div>
+                    <div class="panel-subtitle">Pipeline &amp; behaviors</div>
+                </div>
+
+                <div class="action-panel-grid">
                     <button class="btn danger" onclick="getTopRow()">Remove Row</button>
                     <button class="btn success" onclick="toggleSensor(true)">Sensors ON</button>
                     <button class="btn danger" onclick="toggleSensor(false)">Sensors OFF</button>
@@ -751,379 +1113,400 @@ def home():
                     <button class="btn" onclick="startMotorTest()">Start Motor</button>
                     <button class="btn" onclick="stopMotorTest()">Stop Motor</button>
 
-                    <!-- ML buttons wired to ml.py -->
                     <button class="btn success" onclick="startML()">ML Start</button>
                     <button class="btn danger" onclick="stopML()">ML Stop</button>
 
-                    <!-- AutoNav buttons wired to autonav.py -->
                     <button class="btn success" onclick="startAutonav()">AutoNav Start</button>
                     <button class="btn danger" onclick="stopAutonav()">AutoNav Stop</button>
+                    <span></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel right-column-stack">
+            <div class="panel-inner">
+                <div class="panel-title-row">
+                    <div class="panel-title">Robot Status</div>
+                    <div class="panel-subtitle">Drive / power</div>
+                </div>
+
+                <div class="robot-status-panel">
+                    <div class="robot-main">
+                        <div class="robot-row">
+                            <span class="robot-row-label">Speed</span>
+                            <span class="robot-row-value" id="robot-speed">0</span>
+                        </div>
+                        <div class="robot-btns">
+                            <button class="btn" onclick="setSpeed('slow')">Slow</button>
+                            <button class="btn" onclick="setSpeed('med')">Medium</button>
+                            <button class="btn" onclick="setSpeed('fast')">Fast</button>
+                            <button class="btn" onclick="brakeRobot()">Brake</button>
+                        </div>
+                    </div>
+
+                    <div class="robot-secondary">
+                        <div class="robot-row">
+                            <span class="robot-row-label">Braking</span>
+                            <span class="robot-row-value" id="robot-brake">OFF</span>
+                        </div>
+                        <div class="robot-row">
+                            <span class="robot-row-label">Battery</span>
+                            <span class="robot-row-value" id="robot-battery">0</span>
+                        </div>
+                        <div class="robot-row">
+                            <span class="robot-row-label">Status</span>
+                            <span class="robot-row-value" id="robot-switch">OFF</span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="panel robot-status-panel">
-                <div class="panel-title">Robot Status</div>
-                <div class="kv">Speed: <strong id="robot-speed">{sensor_value}</strong></div>
-                <div class="robot-btns">
-                    <button class="btn" onclick="setSpeed('slow')">Slow</button>
-                    <button class="btn" onclick="setSpeed('med')">Medium</button>
-                    <button class="btn" onclick="setSpeed('fast')">Fast</button>
-                    <button class="btn" onclick="brakeRobot()">Brake</button>
-                </div>
-                <div class="kv">Braking: <strong id="robot-brake">OFF</strong></div>
-                <div class="kv">Battery: <strong id="robot-battery">{sensor_value}</strong></div>
-                <div class="kv">Status: <strong id="robot-switch">OFF</strong></div>
+            <div class="panel-inner">
+                <div class="timer" id="timer">Task time: 0.00s</div>
             </div>
 
-            <div class="panel timer" id="timer">Task time: 0.00s</div>
-
-            <div class="panel">
-                <div class="panel-title">Event Console</div>
+            <div class="panel-inner">
+                <div class="panel-title-row">
+                    <div class="panel-title">Event Console</div>
+                    <div class="panel-subtitle">Recent events</div>
+                </div>
                 <div class="console" id="console"></div>
             </div>
         </div>
     </div>
+</div>
 
-    <script>
-        function getval(el, val) {{
-            document.getElementById(el).textContent = val;
-        }}
+<script>
+    function getval(el, val) {
+        document.getElementById(el).textContent = val;
+    }
 
-        function updateSensorFeed() {{
-            fetch('/sensor_feed')
-                .then(r => r.json())
-                .then(data => {{
-                    getval('imu-time', data.IMU1["Time"]);
-                    getval('imu1-fb', data.IMU1["Forward/backwards Tilt"]);
-                    getval('imu1-ss', data.IMU1["Side-to-Side Tilt"]);
-                    getval('imu1-yaw', data.IMU1["Yaw"]);
-                    getval('imu1-pitch', data.IMU1["Pitch Rate"]);
-                    getval('imu1-roll', data.IMU1["Roll Rate"]);
-                    getval('imu1-rot', data.IMU1["Rotational Velocity"]);
-
-                    getval('imu2-fb', data.IMU2["Forward/backwards Tilt"]);
-                    getval('imu2-ss', data.IMU2["Side-to-Side Tilt"]);
-                    getval('imu2-yaw', data.IMU2["Yaw"]);
-                    getval('imu2-pitch', data.IMU2["Pitch Rate"]);
-                    getval('imu2-roll', data.IMU2["Roll Rate"]);
-                    getval('imu2-rot', data.IMU2["Rotational Velocity"]);
-
-                    getval('imu1linear-lv', data.IMU1Linear["Linear Velocity"]);
-                    getval('imu1linear-xv', data.IMU1Linear["X velocity"]);
-                    getval('imu1linear-yv', data.IMU1Linear["Y velocity"]);
-
-                    getval('enc-l-val', data.EncoderL["Speed"]);
-                    getval('enc-l-status', data.EncoderL["Direction"]);
-                    getval('enc-r-val', data.EncoderR["Speed"]);
-                    getval('enc-r-status', data.EncoderR["Direction"]);
-                }})
-                .catch(err => {{
-                    console.error('Sensor feed error', err);
-                }});
-        }}
-
-        setInterval(updateSensorFeed, 250);
-        updateSensorFeed();
-
-        let calibTimer = null;
-
-        function toggleSensor(on) {{
-            let logMsg = on ? "Sensors turned ON" : "Sensors turned OFF";
-            fetch(on ? '/sensor_on' : '/sensor_off', {{ method: 'POST' }})
-                .then(r => r.json())
-                .then(data => {{
-                    let s = document.getElementById('sensor-switch');
-                    if (on && data.status === "ON") {{
-                        s.textContent = "ON";
-                        s.className = "CALIB";
-                        calibrateSensorCountdown(10, function() {{
-                            s.textContent = "ON";
-                            s.className = "ON";
-                        }});
-                        logLine("SENSOR", logMsg);
-                    }} else if (!on && data.status === "OFF") {{
-                        s.textContent = "OFF";
-                        s.className = "OFF";
-                        document.getElementById('calib-status').textContent = "Auto";
-                        if (calibTimer) clearInterval(calibTimer);
-                        logLine("SENSOR", logMsg);
-                    }} else {{
-                        logLine("SENSOR", "Error toggling sensors");
-                    }}
-                }});
-        }}
-
-        function calibrateSensorCountdown(seconds, doneCb) {{
-            let counter = seconds;
-            document.getElementById('calib-status').textContent = "Calibrating " + counter;
-            let s = document.getElementById('sensor-switch');
-            s.textContent = "ON";
-            s.className = "CALIB";
-
-            if (calibTimer) clearInterval(calibTimer);
-            calibTimer = setInterval(function() {{
-                counter--;
-                document.getElementById('calib-status').textContent =
-                    counter > 0 ? "Calibrating " + counter : "Done";
-                if (counter <= 0) {{
-                    clearInterval(calibTimer);
-                    if (doneCb) doneCb();
-                }}
-            }}, 1000);
-        }}
-
-        function setSpeed(mode) {{
-            let val = mode === "slow" ? 25 : (mode === "med" ? 42 : 88);
-            document.getElementById('robot-speed').textContent = val;
-            logLine("SPEED", "Speed set to " + mode.toUpperCase() + " (" + val + ")");
-        }}
-
-        function brakeRobot() {{
-            document.getElementById('robot-brake').textContent = "ON";
-            logLine("BRAKE", "Robot Braking activated");
-            setTimeout(function() {{
-                document.getElementById('robot-brake').textContent = "OFF";
-            }}, 900);
-        }}
-
-        function toggleRobot() {{
-            const el = document.getElementById('robot-switch');
-            const newState = el.textContent === "OFF" ? "ON" : "OFF";
-            el.textContent = newState;
-            logLine("ROBOT", "Robot switched " + newState);
-            document.getElementById('robot-battery').textContent = {sensor_value};
-        }}
-
-        function getTopRow() {{
-            logLine("ACTION", "Remove Row button pressed");
-            fetch('/get_top_row', {{ method: 'POST' }})
-                .then(r => r.json())
-                .then(data => {{
-                    // optional UI update with data.message
-                }});
-        }}
-
-        function startMotorTest() {{
-            logLine("MOTOR", "Starting Motor Test (clearing numbers.txt)");
-            fetch('/start_motor_test', {{ method: 'POST' }})
-                .then(r => r.json())
-                .then(data => {{
-                    if (data.status === "started") {{
-                        logLine("MOTOR", "Motor Test started successfully");
-                    }} else {{
-                        logLine("MOTOR", "Motor Test failed to start");
-                    }}
-                }})
-                .catch(err => {{
-                    logLine("ERR", "Motor Test start error: " + err);
-                }});
-        }}
-
-        function stopMotorTest() {{
-            logLine("MOTOR", "Stopping Motor Test");
-            fetch('/stop_motor_test', {{ method: 'POST' }})
-                .then(r => r.json())
-                .then(data => {{
-                    logLine("MOTOR", "Motor Test stopped");
-                }})
-                .catch(err => {{
-                    logLine("ERR", "Motor Test stop error: " + err);
-                }});
-        }}
-
-        // ML controls -> ml.py
-        function startML() {{
-            logLine("ML", "Starting ML");
-            fetch('/start_ml', {{ method: 'POST' }})
-                .then(r => r.json())
-                .then(data => {{
-                    if (data.status === "started") {{
-                        logLine("ML", "ML started");
-                    }} else {{
-                        logLine("ML", "ML failed to start");
-                    }}
-                }})
-                .catch(err => {{
-                    logLine("ERR", "ML start error: " + err);
-                }});
-        }}
-
-        function stopML() {{
-            logLine("ML", "Stopping ML");
-            fetch('/stop_ml', {{ method: 'POST' }})
-                .then(r => r.json())
-                .then(data => {{
-                    logLine("ML", "ML stopped");
-                }})
-                .catch(err => {{
-                    logLine("ERR", "ML stop error: " + err);
-                }});
-        }}
-
-        // AutoNav controls -> autonav.py
-        function startAutonav() {{
-            logLine("AUTONAV", "Starting AutoNav");
-            fetch('/start_autonav', {{ method: 'POST' }})
-                .then(r => r.json())
-                .then(data => {{
-                    if (data.status === "started") {{
-                        logLine("AUTONAV", "AutoNav started");
-                    }} else {{
-                        logLine("AUTONAV", "AutoNav failed to start");
-                    }}
-                }})
-                .catch(err => {{
-                    logLine("ERR", "AutoNav start error: " + err);
-                }});
-        }}
-
-        function stopAutonav() {{
-            logLine("AUTONAV", "Stopping AutoNav");
-            fetch('/stop_autonav', {{ method: 'POST' }})
-                .then(r => r.json())
-                .then(data => {{
-                    logLine("AUTONAV", "AutoNav stopped");
-                }})
-                .catch(err => {{
-                    logLine("ERR", "AutoNav stop error: " + err);
-                }});
-        }}
-
-        function logLine(tag, text) {{
-            const c = document.getElementById('console');
-            if (!c) return;
-            const div = document.createElement('div');
-            div.className = 'line';
-            const t = document.createElement('span');
-            t.className = 'tag';
-            t.textContent = tag;
-            const span = document.createElement('span');
-            span.textContent = text;
-            div.appendChild(t);
-            div.appendChild(span);
-            c.appendChild(div);
-            c.scrollTop = c.scrollHeight;
-        }}
-
-        // Joystick logic with 0.25s throttling for console logging
-        const area = document.getElementById('joystick-area');
-        const knob = document.getElementById('joystick-knob');
-        let joyCenter = {{ x: area.clientWidth / 2, y: area.clientHeight / 2 }};
-        let joyRadius = 70;
-        let joyActive = false;
-        let lastJoystickLog = 0;
-        const joystickThrottleMs = 250; // 0.25 seconds in milliseconds
-
-        function setKnob(x, y) {{
-            knob.style.left = x + 'px';
-            knob.style.top = y + 'px';
-        }}
-
-        setKnob(joyCenter.x - knob.clientWidth / 2, joyCenter.y - knob.clientHeight / 2);
-
-        function sendJoystick(x, y) {{
-            const now = Date.now();
-            const shouldLog = now - lastJoystickLog > joystickThrottleMs;
-            if (shouldLog) lastJoystickLog = now;
-
-            fetch('/direction_ajax', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ x: x, y: y }})
-            }})
+    function updateSensorFeed() {
+        fetch('/sensor_feed')
             .then(r => r.json())
-            .then(data => {{
-                if (data && data.message && shouldLog) {{
-                    logLine("JOY", data.message);
-                }}
-            }})
-            .catch(err => {{
-                if (shouldLog) logLine("ERR", "Joystick send failed: " + err);
-            }});
-        }}
+            .then(data => {
+                getval('imu-time', data.IMU1["Time"]);
+                getval('imu1-fb', data.IMU1["Forward/backwards Tilt"]);
+                getval('imu1-ss', data.IMU1["Side-to-Side Tilt"]);
+                getval('imu1-yaw', data.IMU1["Yaw"]);
+                getval('imu1-pitch', data.IMU1["Pitch Rate"]);
+                getval('imu1-roll', data.IMU1["Roll Rate"]);
+                getval('imu1-rot', data.IMU1["Rotational Velocity"]);
 
-        function updateJoystick(clientX, clientY) {{
-            const rect = area.getBoundingClientRect();
-            const cx = clientX - rect.left;
-            const cy = clientY - rect.top;
-            let dx = cx - joyCenter.x;
-            let dy = cy - joyCenter.y;
+                getval('imu2-fb', data.IMU2["Forward/backwards Tilt"]);
+                getval('imu2-ss', data.IMU2["Side-to-Side Tilt"]);
+                getval('imu2-yaw', data.IMU2["Yaw"]);
+                getval('imu2-pitch', data.IMU2["Pitch Rate"]);
+                getval('imu2-roll', data.IMU2["Roll Rate"]);
+                getval('imu2-rot', data.IMU2["Rotational Velocity"]);
 
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > joyRadius) {{
-                const scale = joyRadius / dist;
-                dx *= scale;
-                dy *= scale;
-            }}
+                getval('imu1linear-lv', data.IMU1Linear["Linear Velocity"]);
+                getval('imu1linear-xv', data.IMU1Linear["X velocity"]);
+                getval('imu1linear-yv', data.IMU1Linear["Y velocity"]);
 
-            const knobX = joyCenter.x + dx - knob.clientWidth / 2;
-            const knobY = joyCenter.y + dy - knob.clientHeight / 2;
-            setKnob(knobX, knobY);
+                getval('enc-l-val', data.EncoderL["Speed"]);
+                getval('enc-l-status', data.EncoderL["Direction"]);
+                getval('enc-r-val', data.EncoderR["Speed"]);
+                getval('enc-r-status', data.EncoderR["Direction"]);
+            })
+            .catch(err => {
+                console.error('Sensor feed error', err);
+            });
+    }
 
-            let normX = dx / joyRadius;
-            let normY = -dy / joyRadius;
+    setInterval(updateSensorFeed, 250);
+    updateSensorFeed();
 
-            if (normY < -1) normY = -1;
-            if (normY > 1) normY = 1;
+    let calibTimer = null;
 
-            if (normX < -1) normX = -1;
-            if (normX > 1.2) normX = 1.2;
+    function toggleSensor(on) {
+        let logMsg = on ? "Sensors turned ON" : "Sensors turned OFF";
+        fetch(on ? '/sensor_on' : '/sensor_off', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                let s = document.getElementById('sensor-switch');
+                if (on && data.status === "ON") {
+                    s.textContent = "ON";
+                    s.className = "sensor-switch CALIB";
+                    calibrateSensorCountdown(10, function() {
+                        s.textContent = "ON";
+                        s.className = "sensor-switch ON";
+                    });
+                    logLine("SENSOR", logMsg);
+                } else if (!on && data.status === "OFF") {
+                    s.textContent = "OFF";
+                    s.className = "sensor-switch OFF";
+                    document.getElementById('calib-status').textContent = "Auto";
+                    if (calibTimer) clearInterval(calibTimer);
+                    logLine("SENSOR", logMsg);
+                } else {
+                    logLine("SENSOR", "Error toggling sensors");
+                }
+            });
+    }
 
-            document.getElementById('joy-x').textContent = normX.toFixed(2);
-            document.getElementById('joy-y').textContent = normY.toFixed(2);
+    function calibrateSensorCountdown(seconds, doneCb) {
+        let counter = seconds;
+        document.getElementById('calib-status').textContent = "Calibrating " + counter;
 
-            sendJoystick(normX, normY);
-        }}
+        let s = document.getElementById('sensor-switch');
+        s.textContent = "ON";
+        s.className = "sensor-switch CALIB";
 
-        function resetJoystick() {{
-            setKnob(joyCenter.x - knob.clientWidth / 2, joyCenter.y - knob.clientHeight / 2);
-            document.getElementById('joy-x').textContent = "0.00";
-            document.getElementById('joy-y').textContent = "0.00";
-            const now = Date.now();
-            if (now - lastJoystickLog > joystickThrottleMs) {{
-                lastJoystickLog = now;
-                sendJoystick(0, 0);
-            }}
-        }}
+        if (calibTimer) clearInterval(calibTimer);
+        calibTimer = setInterval(function() {
+            counter--;
+            document.getElementById('calib-status').textContent =
+                counter > 0 ? "Calibrating " + counter : "Done";
+            if (counter <= 0) {
+                clearInterval(calibTimer);
+                if (doneCb) doneCb();
+            }
+        }, 1000);
+    }
 
-        area.addEventListener('mousedown', function(e) {{
-            joyActive = true;
-            updateJoystick(e.clientX, e.clientY);
-        }});
+    function setSpeed(mode) {
+        let val = mode === "slow" ? 25 : (mode === "med" ? 42 : 88);
+        document.getElementById('robot-speed').textContent = val;
+        logLine("SPEED", "Speed set to " + mode.toUpperCase() + " (" + val + ")");
+    }
 
-        window.addEventListener('mousemove', function(e) {{
-            if (joyActive) updateJoystick(e.clientX, e.clientY);
-        }});
+    function brakeRobot() {
+        document.getElementById('robot-brake').textContent = "ON";
+        logLine("BRAKE", "Robot Braking activated");
+        setTimeout(function() {
+            document.getElementById('robot-brake').textContent = "OFF";
+        }, 900);
+    }
 
-        window.addEventListener('mouseup', function() {{
-            if (joyActive) {{
-                joyActive = false;
-                resetJoystick();
-            }}
-        }});
+    function getTopRow() {
+        logLine("ACTION", "Remove Row button pressed");
+        fetch('/get_top_row', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => { });
+    }
 
-        area.addEventListener('touchstart', function(e) {{
-            e.preventDefault();
-            joyActive = true;
-            const t = e.touches[0];
-            updateJoystick(t.clientX, t.clientY);
-        }}, {{ passive: false }});
+    function startMotorTest() {
+        logLine("MOTOR", "Starting Motor Test (clearing numbers.txt)");
+        fetch('/start_motor_test', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === "started") {
+                    logLine("MOTOR", "Motor Test started successfully");
+                } else {
+                    logLine("MOTOR", "Motor Test failed to start");
+                }
+            })
+            .catch(err => {
+                logLine("ERR", "Motor Test start error: " + err);
+            });
+    }
 
-        area.addEventListener('touchmove', function(e) {{
-            e.preventDefault();
-            if (!joyActive) return;
-            const t = e.touches[0];
-            updateJoystick(t.clientX, t.clientY);
-        }}, {{ passive: false }});
+    function stopMotorTest() {
+        logLine("MOTOR", "Stopping Motor Test");
+        fetch('/stop_motor_test', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                logLine("MOTOR", "Motor Test stopped");
+            })
+            .catch(err => {
+                logLine("ERR", "Motor Test stop error: " + err);
+            });
+    }
 
-        area.addEventListener('touchend', function(e) {{
-            e.preventDefault();
-            if (joyActive) {{
-                joyActive = false;
-                resetJoystick();
-            }}
-        }}, {{ passive: false }});
-    </script>
+    function startML() {
+        logLine("ML", "Starting ML");
+        fetch('/start_ml', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === "started") {
+                    logLine("ML", "ML started");
+                } else {
+                    logLine("ML", "ML failed to start");
+                }
+            })
+            .catch(err => {
+                logLine("ERR", "ML start error: " + err);
+            });
+    }
+
+    function stopML() {
+        logLine("ML", "Stopping ML");
+        fetch('/stop_ml', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                logLine("ML", "ML stopped");
+            })
+            .catch(err => {
+                logLine("ERR", "ML stop error: " + err);
+            });
+    }
+
+    function startAutonav() {
+        logLine("AUTONAV", "Starting AutoNav");
+        fetch('/start_autonav', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === "started") {
+                    logLine("AUTONAV", "AutoNav started");
+                } else {
+                    logLine("AUTONAV", "AutoNav failed to start");
+                }
+            })
+            .catch(err => {
+                logLine("ERR", "AutoNav start error: " + err);
+            });
+    }
+
+    function stopAutonav() {
+        logLine("AUTONAV", "Stopping AutoNav");
+        fetch('/stop_autonav', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                logLine("AUTONAV", "AutoNav stopped");
+            })
+            .catch(err => {
+                logLine("ERR", "AutoNav stop error: " + err);
+            });
+    }
+
+    function logLine(tag, text) {
+        const c = document.getElementById('console');
+        if (!c) return;
+        const div = document.createElement('div');
+        div.className = 'line';
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'console-time';
+        timeSpan.textContent = new Date().toLocaleTimeString();
+        const t = document.createElement('span');
+        t.className = 'tag';
+        t.textContent = tag;
+        const span = document.createElement('span');
+        span.textContent = text;
+        div.appendChild(timeSpan);
+        div.appendChild(t);
+        div.appendChild(span);
+        c.appendChild(div);
+        c.scrollTop = c.scrollHeight;
+    }
+
+    const area = document.getElementById('joystick-area');
+    const knob = document.getElementById('joystick-knob');
+    let joyCenter = { x: area.clientWidth / 2, y: area.clientHeight / 2 };
+    let joyRadius = 70;
+    let joyActive = false;
+    let lastJoystickLog = 0;
+    const joystickThrottleMs = 250;
+
+    function setKnob(x, y) {
+        knob.style.left = x + 'px';
+        knob.style.top = y + 'px';
+    }
+
+    setKnob(joyCenter.x - knob.clientWidth / 2, joyCenter.y - knob.clientHeight / 2);
+
+    function sendJoystick(x, y) {
+        const now = Date.now();
+        const shouldLog = now - lastJoystickLog > joystickThrottleMs;
+        if (shouldLog) lastJoystickLog = now;
+
+        fetch('/direction_ajax', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ x: x, y: y })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data && data.message && shouldLog) {
+                logLine("JOY", data.message);
+            }
+        })
+        .catch(err => {
+            if (shouldLog) logLine("ERR", "Joystick send failed: " + err);
+        });
+    }
+
+    function updateJoystick(clientX, clientY) {
+        const rect = area.getBoundingClientRect();
+        const cx = clientX - rect.left;
+        const cy = clientY - rect.top;
+        let dx = cx - joyCenter.x;
+        let dy = cy - joyCenter.y;
+
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > joyRadius) {
+            const scale = joyRadius / dist;
+            dx *= scale;
+            dy *= scale;
+        }
+
+        const knobX = joyCenter.x + dx - knob.clientWidth / 2;
+        const knobY = joyCenter.y + dy - knob.clientHeight / 2;
+        setKnob(knobX, knobY);
+
+        let normX = dx / joyRadius;
+        let normY = -dy / joyRadius;
+
+        if (normY < -1) normY = -1;
+        if (normY > 1) normY = 1;
+        if (normX < -1) normX = -1;
+        if (normX > 1.2) normX = 1.2;
+
+        document.getElementById('joy-x').textContent = normX.toFixed(2);
+        document.getElementById('joy-y').textContent = normY.toFixed(2);
+
+        sendJoystick(normX, normY);
+    }
+
+    function resetJoystick() {
+        setKnob(joyCenter.x - knob.clientWidth / 2, joyCenter.y - knob.clientHeight / 2);
+        document.getElementById('joy-x').textContent = "0.00";
+        document.getElementById('joy-y').textContent = "0.00";
+        const now = Date.now();
+        if (now - lastJoystickLog > joystickThrottleMs) {
+            lastJoystickLog = now;
+            sendJoystick(0, 0);
+        }
+    }
+
+    area.addEventListener('mousedown', function(e) {
+        joyActive = true;
+        updateJoystick(e.clientX, e.clientY);
+    });
+
+    window.addEventListener('mousemove', function(e) {
+        if (joyActive) updateJoystick(e.clientX, e.clientY);
+    });
+
+    window.addEventListener('mouseup', function() {
+        if (joyActive) {
+            joyActive = false;
+            resetJoystick();
+        }
+    });
+
+    area.addEventListener('touchstart', function(e) {
+        e.preventDefault();
+        joyActive = true;
+        const t = e.touches[0];
+        updateJoystick(t.clientX, t.clientY);
+    }, { passive: false });
+
+    area.addEventListener('touchmove', function(e) {
+        e.preventDefault();
+        if (!joyActive) return;
+        const t = e.touches[0];
+        updateJoystick(t.clientX, t.clientY);
+    }, { passive: false });
+
+    area.addEventListener('touchend', function(e) {
+        e.preventDefault();
+        if (joyActive) {
+            joyActive = false;
+            resetJoystick();
+        }
+    }, { passive: false });
+</script>
 </body>
 </html>
 """
