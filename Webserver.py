@@ -15,9 +15,9 @@ from hardware_interface_3_28 import get_sensor_data, get_shm_age_ms
 app = Flask(__name__)
 
 PROGRAMS = {
-    "sensors":    "sensors_3_28.py",
-    "ultrasonic": "ultrasonic_bg.py",
-    "pid":        "deployPID_3_28.py",
+    "sensors":    "sensors.py",
+    "ultrasonic": "ultrasonic.py",
+    "pid":        "deployPID.py",
     "motorwasd":  "motor_wasd.py",
 }
 
