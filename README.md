@@ -1,0 +1,1 @@
+This application is built for the sole purpose of improving the usability of our Inverted Pendulum project. It has a about page about our project, On/Off buttons for every feature that we need to remmotely activate, A Manual and autonomous control area, A Data collection area with: Raw numbers, graphs for the Tilt from the IMU and Encoder readings from out Motor Controllers
