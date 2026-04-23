@@ -15,9 +15,9 @@ from hardware_interface_3_28 import get_sensor_data, get_shm_age_ms
 app = Flask(__name__)
 
 PROGRAMS = {
-    "sensors":    "sensors.py",
-    "ultrasonic": "ultrasonic.py",
-    "pid":        "deployPID.py",
+    "sensors":    "sensors_3_28.py",
+    "ultrasonic": "ultrasonic_bg.py",
+    "pid":        "deployPID_3_28.py",
     "motorwasd":  "motor_wasd.py",
 }
 
@@ -1389,7 +1389,7 @@ def home():
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
                     <h2 style="margin:0;">Inverted Pendulum Self-Balancing Robot 3</h2>
                     <button onclick="openSlideshow()" class="pres-btn">Final Presentation</button>
-                    <a href="https://github.com/Inverted-Pendulum-Team-3" target="_blank" class="pres-btn" style="text-decoration:none;">GitHub</a>
+                    <a href="https://github.com/ECEN404-2026SP-Inverted-Pendulum-Team-3" target="_blank" class="pres-btn" style="text-decoration:none;">GitHub</a>
                 </div>
                 <p>A two-wheeled self-balancing robot designed and built for the ECEN 404 Senior Capstone at Texas A&M University. The robot maintains upright balance using real-time PID control driven by IMU feedback, with manual and autonomous navigation modes accessible through this web dashboard.</p>
             </div>
@@ -2432,7 +2432,25 @@ def home():
     let _testActive  = false;
     let _testStart   = null;
     let _testTimer   = null;
+    let _testDemoTimers = [];
     const TEST_DURATION_S = 30;
+
+    function _clearTestDemoTimers() {
+        _testDemoTimers.forEach(id => clearTimeout(id));
+        _testDemoTimers = [];
+    }
+
+    /** Event-console sequence similar to a real sensors → calibrate → live → PID run. */
+    function _startTestModeEventSequence() {
+        _clearTestDemoTimers();
+        const T = (ms, fn) => { _testDemoTimers.push(setTimeout(fn, ms)); };
+        T(120,  () => logLine('SENSOR', 'sensors_3_28 ON'));
+        T(350,  () => logLine('SENSORS', 'sensors_3_28 + ultrasonic_bg started — calibrating...'));
+        T(600,  () => logLine('SENSORS', 'sensors_3_28.py started — auto-calibrating'));
+        T(900,  () => logLine('SENSORS', 'Sensors Calibrating — keep robot still...'));
+        T(2600, () => logLine('SENSORS', 'Data flowing — calibration complete'));
+        T(3000, () => logLine('PID', 'deployPID_3_28.py started'));
+    }
 
     function toggleTestMode() {
         if (_testActive) { _stopTestMode(); return; }
@@ -2443,19 +2461,22 @@ def home():
         btn.style.borderColor = '#00ff88';
         btn.style.color       = '#00ff88';
         btn.textContent       = '⚙ Test ON';
-        logLine('TEST', 'Test mode started — 30 s of simulated data');
+        logLine('TEST', 'UI test mode — 30 s simulated stream (stability + console demo)');
+        _startTestModeEventSequence();
         _testTimer = setTimeout(_stopTestMode, TEST_DURATION_S * 1000);
     }
 
     function _stopTestMode() {
         _testActive = false;
         clearTimeout(_testTimer);
+        _clearTestDemoTimers();
         const btn = document.getElementById('btn-test-mode');
         btn.style.background  = '#7a3a00';
         btn.style.borderColor = '#ff8c00';
         btn.style.color       = '#ff8c00';
         btn.textContent       = '⚙ Test';
-        logLine('TEST', 'Test mode ended');
+        // Do not log fake PID/sensor OFF — real processes may still be running on the Pi.
+        logLine('TEST', 'UI test mode ended — live polling restored');
     }
 
     function _makeTestData() {
@@ -2500,7 +2521,7 @@ def home():
             ultrasonic_right_cm: null,
             ultrasonic_left_cm:  null,
             us_age_ms:          null,
-            pid_elapsed_s:      Math.round(t),
+            pid_elapsed_s:      t,
             pid_timing:         { hz: '100', avg_ms: '9.8', min_ms: '8.1', max_ms: '12.4' },
             sensor_stats: {
                 main_hz: 100, imu_hz: 200, enc_hz: 2000,
@@ -2617,6 +2638,14 @@ def home():
             const rd = document.getElementById('sp-reads');
             if (rd) rd.textContent = ss.total;
         }
+
+        // Same as live path: stability timer / best run + top-bar LEDs
+        setLed('led-sensors', true);
+        setLed('led-pid', d.pid_running);
+        setLed('led-ultrasonic', !!d.ultrasonic_running);
+        updateStabilityTimer(d.pid_running, d.pid_elapsed_s);
+
+        document.getElementById('imu-time').textContent = new Date().toLocaleTimeString();
     }
 
     setInterval(updateLiveSensorData, 100);
